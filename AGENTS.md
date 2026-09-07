@@ -5,18 +5,30 @@ this file covers the parts you cannot infer from the code.
 
 ## What this is
 
-A Rust library (`flash-dance`) that drives a **Novation Launchpad Mini MK3**
-over USB MIDI: set the LEDs under its 8x8 grid, top row and right column, and
-receive button presses. One dependency, `midir`. Two source files:
+A cargo workspace around a Rust library that drives a **Novation Launchpad Mini
+MK3** over USB MIDI: set the LEDs under its 8x8 grid, top row and right column,
+and receive button presses. One external dependency, `midir`.
 
-- `src/lib.rs` — the whole library, ~200 lines: `Pad`, `Light`, `Event`, `Launchpad`.
-- `src/main.rs` — a demo binary (`cargo run`): tap grid pads to toggle them, hold
-  a side button to light it, top-right button quits.
+```
+api/src/lib.rs          the `flash-dance` crate, ~200 lines: Pad, Light, Event, Launchpad
+apps/paint/src/main.rs  an app: tap grid pads to toggle them, top-right button quits
+```
 
-There is deliberately no module tree, no error enum, no trait abstraction. The
-device has one model and one protocol; adding layers for a second one that does
-not exist is the wrong move. If you are asked to support a Launchpad Pro or MK2,
-that is the point to generalise — not before.
+The split exists so the API stays publishable and the apps stay throwaway. `api/`
+is the only crate that talks MIDI or knows the SysEx protocol; **an app must never
+send raw bytes to the device.** If an app needs something the API cannot express,
+add it to the API — that is the signal the API is missing something, not a licence
+to reach around it.
+
+Each app is its own crate under `apps/`, picked up by the `apps/*` glob in the
+workspace manifest, `publish = false`, depending on `flash-dance = { workspace = true }`.
+Add one with `cargo new --bin apps/<name>`. Apps do not depend on each other; if
+two of them want the same helper, it belongs in the API.
+
+Inside the API there is deliberately no module tree, no error enum, no trait
+abstraction. The device has one model and one protocol; adding layers for a second
+one that does not exist is the wrong move. If you are asked to support a Launchpad
+Pro or MK2, that is the point to generalise — not before.
 
 ## How the device actually works
 
@@ -32,7 +44,7 @@ hw:2,0,0  Launchpad Mini MK3 LPMiniMK3 DA   <- "DAW" port, for Ableton-style con
 hw:2,0,1  Launchpad Mini MK3 LPMiniMK3 MI   <- "MIDI" port, the one we want
 ```
 
-`find_port` in `src/lib.rs` filters port names for `LPMiniMK3` and then prefers the
+`find_port` in `api/src/lib.rs` filters port names for `LPMiniMK3` and then prefers the
 one containing `MI`. Talking to the DAW port instead produces no error and no
 lights — a silent failure that is easy to misdiagnose. Check `amidi -l` first.
 
@@ -94,10 +106,10 @@ events stop, so it must not be discarded.
 ## Working on this
 
 ```bash
-cargo test      # 3 unit tests: pad<->xy mapping, SysEx encoding, MIDI parsing
-cargo clippy --all-targets
+cargo test --workspace   # 3 unit tests: pad<->xy mapping, SysEx encoding, MIDI parsing
+cargo clippy --workspace --all-targets
 cargo fmt
-cargo run       # the demo, needs the device plugged in
+cargo run -p paint       # an app, needs the device plugged in
 ```
 
 Build needs ALSA headers on Linux (`libasound2-dev`).
@@ -106,7 +118,7 @@ Build needs ALSA headers on Linux (`libasound2-dev`).
 functions — index arithmetic, byte encoding, message parsing — which is where the
 bugs actually live. Anything past that (does the right LED light, does a press
 arrive) needs the physical device and a human looking at it. Do not claim LED or
-button behaviour is verified because `cargo test` passed; run `cargo run`, and say
+button behaviour is verified because `cargo test` passed; run the app, and say
 plainly that a person has to confirm what they saw.
 
 ### Gotcha: killing the process leaves the device lit
@@ -128,7 +140,7 @@ Prefer a quit button (as the demo does) over Ctrl+C when running interactively.
   `<type>/<short-description>` branch, never commit to `main`, never `--no-verify`
   or skip GPG signing, conventional-commit messages, **no agent attribution of any
   kind** in commits, branches, PRs or issues.
-- There is no git remote configured, so there is nothing to push and no PR to open
-  unless one gets added.
+- `origin` is `davidgomesdev/flash-dance` (private). Push the branch and open a PR
+  with `gh pr create`; leave the merge to a human.
 - Keep it small. The bar for a new dependency, file, or abstraction here is that
   the existing ~200 lines genuinely cannot do the job.
