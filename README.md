@@ -1,4 +1,4 @@
-# flashdance
+# flash-dance
 
 A small Rust API for the Novation Launchpad Mini MK3 over USB MIDI: set the button
 LEDs, receive the button presses. The lights flash, the pads get danced on.
@@ -9,7 +9,7 @@ top-right button quits.
 ## Usage
 
 ```rust
-use flashdance::{Event, Launchpad, Light, Pad};
+use flash_dance::{Event, Launchpad, Light, Pad};
 
 let (mut pad, events) = Launchpad::connect()?;   // enters programmer mode
 

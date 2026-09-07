@@ -5,7 +5,7 @@ this file covers the parts you cannot infer from the code.
 
 ## What this is
 
-A Rust library (`flashdance`) that drives a **Novation Launchpad Mini MK3**
+A Rust library (`flash-dance`) that drives a **Novation Launchpad Mini MK3**
 over USB MIDI: set the LEDs under its 8x8 grid, top row and right column, and
 receive button presses. One dependency, `midir`. Two source files:
 
