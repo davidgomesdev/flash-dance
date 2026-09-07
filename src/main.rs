@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use launchpad_mini::{Event, Launchpad, Light, Pad, Result};
+use flashdance::{Event, Launchpad, Light, Pad, Result};
 
 const QUIT: Pad = Pad(98); // top row, rightmost
 
