@@ -3,8 +3,12 @@
 A small Rust API for the Novation Launchpad Mini MK3 over USB MIDI: set the button
 LEDs, receive the button presses. The lights flash, the pads get danced on.
 
-`cargo run` starts a demo — tap grid pads to toggle them, hold the side buttons,
-top-right button quits.
+A cargo workspace: `api/` is the library, `apps/*` are the things built on it.
+
+```
+api/          the flash-dance crate — LEDs and button events
+apps/paint/   cargo run -p paint — tap pads to toggle them, top-right quits
+```
 
 ## Usage
 
@@ -37,3 +41,14 @@ palette indices (`0..128`, see Novation's programmer reference for the chart);
 single SysEx message, which matters if you are animating.
 
 Requires ALSA on Linux (`libasound2-dev` to build).
+
+## Adding an app
+
+Drop a crate in `apps/`; the workspace picks it up from the `apps/*` glob.
+
+```bash
+cargo new --bin apps/strobe
+```
+
+Then depend on the API with `flash-dance = { workspace = true }`, and run it with
+`cargo run -p strobe`.
