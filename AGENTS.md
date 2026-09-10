@@ -10,13 +10,24 @@ MK3** over USB MIDI: set the LEDs under its 8x8 grid, top row and right column,
 and receive button presses. One external dependency, `midir`.
 
 ```
-api/src/lib.rs          the `flash-dance` crate, ~200 lines: Pad, Light, Event, Launchpad
-apps/paint/src/main.rs  an app: tap grid pads to toggle them, top-right button quits
+api/           the `flash-dance` crate: the MIDI driver, plus the drawing
+               primitives every app shares (Grid, hsv, Clock, Rng)
+audio/         the `flash-dance-audio` crate: sound in, a level, eight bands
+               and a beat out. Nothing here knows about Launchpads
+apps/effects/  18 LED effects, a picker and a speed control; `-- <name>` starts on one
+apps/paint/    tap grid pads to toggle them
+apps/palette/  browse the device's 128 palette colours and print indices
+apps/whack/    whack-a-mole
+apps/simon/    Simon, on four 4x4 quadrants
+apps/snake/    snake, steered with the device's arrow buttons
+apps/life/     Conway's life, drawable and self-reseeding
 ```
 
 The split exists so the API stays publishable and the apps stay throwaway. `api/`
 is the only crate that talks MIDI or knows the SysEx protocol; **an app must never
-send raw bytes to the device.** If an app needs something the API cannot express,
+send raw bytes to the device.** `audio/` depends on neither and knows nothing about
+the device — an effect is where a sound becomes a colour, and that is the only
+place the two meet. If an app needs something the API cannot express,
 add it to the API — that is the signal the API is missing something, not a licence
 to reach around it.
 
@@ -26,9 +37,37 @@ Add one with `cargo new --bin apps/<name>`. Apps do not depend on each other; if
 two of them want the same helper, it belongs in the API.
 
 Inside the API there is deliberately no module tree, no error enum, no trait
-abstraction. The device has one model and one protocol; adding layers for a second
-one that does not exist is the wrong move. If you are asked to support a Launchpad
-Pro or MK2, that is the point to generalise — not before.
+abstraction, and **no `Effect` trait** — effects are plain methods on one flat
+struct in `apps/effects`, and a trait with fourteen implementations would buy
+nothing. The device has one model and one protocol; if you are asked to support a
+Launchpad Pro or MK2, that is the point to generalise — not before.
+
+Effects are driven by a **virtual clock**: `main` scales wall-clock `dt` by the
+speed setting and hands effects the result, so one speed control reaches motion,
+decay and spawn rates alike. That only works because nothing renders per frame —
+a trail is `decay(per_second, dt)`, not a fixed factor, and fire propagates off an
+accumulator. Write new effects the same way, or speed will silently skip them.
+
+### Drawing primitives
+
+`Grid` is a frame buffer of **linear** colour that effects write and
+`Launchpad::set_all` consumes via `Grid::lights()`. Two things about it matter:
+
+- Coordinates are `i32` and off-grid reads and writes are silently ignored. Effects
+  that ripple, sweep and scroll compute out-of-bounds constantly; bounds-checking
+  each one at the call site was pure noise.
+- Colour is linear `0.0..=1.0` internally and gamma-encoded once on the way out
+  (`GAMMA`, 2.2). Fades, `add` and `fade` are arithmetic that only behaves in
+  linear light, and a linear ramp sent raw to the LEDs looks like it snaps off
+  early. **Do not send `Light::Rgb` computed by hand for anything that fades** —
+  go through `Grid`, or reproduce the gamma step yourself.
+
+`Clock::tick` is the frame loop: it spends the gap between frames blocking on the
+event channel, so an effect renders on schedule and still sees presses immediately.
+No threads, no async. `Clock::fps()` reports what was actually achieved.
+
+`Rng` is a six-line xorshift, in the API rather than in each app because apps share
+code only through this crate and `rand` would be a dependency tree in exchange.
 
 ## How the device actually works
 
@@ -88,7 +127,57 @@ animating; batching does not.
 
 Colours for `Solid`/`Flash`/`Pulse` are **palette indices**, not RGB. The palette
 chart is in Novation's programmer reference; useful ones: 0 off, 3 white, 5 red,
-21 green, 37 cyan, 45 blue.
+21 green, 37 cyan, 45 blue. `cargo run -p palette` browses the rest on the device.
+
+### Brightness is a device setting, and it was found at zero
+
+The device has a global brightness level, `F0 00 20 29 02 0D 08 <0-127> F7`, which
+scales every LED. **If effects look dim, check this before touching any code.**
+The first time it was read on this hardware it came back `00` — the minimum — which
+made everything look washed out for reasons nothing in the source could explain.
+
+It has a readback variant, so you can measure it rather than guess:
+
+```bash
+amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 08 F7' -d -t 1
+#   -> F0002029020D08 <level> F7
+```
+
+`connect` reads the level, raises it to 127, and drop puts the old level back;
+`apps/effects` also puts it on the up/down arrows. Restoring matters because the
+level **persists on the device** across unplugging — it is the Setup menu's LED
+level — so without it an app that dims the device would leave it dim for
+everything else, Ableton included.
+
+**The manual documents no default brightness**, only the 0–127 range and the
+Setup menu's eight levels, so there is no constant to restore to and the value the
+device was on is the only honest answer. If the readback does not arrive within
+250 ms, `brightness_was` stays `None` and drop leaves brightness alone rather than
+inventing a value.
+
+This is also the one place the input callback looks at something other than button
+events: `parse_brightness` intercepts the reply before `Event::parse` sees it. The
+device sends confirmations for other commands too (`0Eh` mode changes show up on
+the wire), so match on the command byte, never on "is a SysEx".
+
+Brightness and `GAMMA` are different knobs and worth not confusing: brightness
+scales everything, gamma changes only how the midtones sit between off and full.
+
+### Throughput: fast enough, and with no backpressure
+
+Measured, not guessed:
+
+| | |
+|---|---|
+| Device drain rate | **~85 KB/s** (22 KB and 110 KB bursts through rawmidi agreed) |
+| Full 64-pad RGB frame | 330 bytes, ~3.8 ms |
+| Ceiling for full frames | **~265 fps** — 30 fps uses about 12% of the link |
+
+So the link is not the constraint, but **`set_all` never blocks**: 20 000 frames
+(6.6 MB) went out through midir in 0.74 s, which is 9 MB/s and far beyond what the
+device can consume. There is no flow control anywhere in the path, so sending
+faster than the device drains does not push back — it silently builds latency or
+loses frames. Pace with `Clock`; do not treat a returning `set_all` as delivery.
 
 ### Input: notes and CCs, velocity 0 means release
 
@@ -103,23 +192,91 @@ velocity sensitive; the edge buttons always report 127.
 alive in the `Launchpad` struct as `_input` — dropping it closes the port and the
 events stop, so it must not be discarded.
 
+## Sound
+
+`audio/` captures by spawning **`parec`**, not by binding an audio library. That
+is a deliberate trade and worth understanding before replacing it: PulseAudio and
+PipeWire expose an output's `.monitor` as an ordinary source, so *system sound
+costs exactly as much code as a microphone* — one name in one argument. A portable
+capture crate (`cpal` and friends) gives you input devices and stops, and would
+have been the project's second dependency. `parec` makes it zero: `audio/` has no
+dependencies at all, FFT included.
+
+Three things in there were found the hard way:
+
+- **`--latency-msec=25` is load-bearing.** Without it `parec` hands over about a
+  second of audio in one go, and since the ring only keeps the newest 2048 samples
+  the analysis *freezes* between deliveries — a spectrum that holds one shape for a
+  second, then jumps. It looks like a hung thread and is not one.
+- **The reader thread must read whole samples.** It uses `read_exact` on an
+  even-sized buffer; a short read that split one 16-bit sample would shift every
+  byte after it and turn the rest of the stream into noise.
+- **`WINDOW` is 2048, not 1024.** The lowest band is 40–80 Hz, and at 1024 samples
+  that octave gets two bins, so a 60 Hz note lands in the wrong band. The window
+  always ends on the newest sample, so the extra length costs no latency on an
+  onset — a kick is just averaged with a little more of what came before it.
+
+Everything comes out `0.0..=1.0` through a running gain (fast attack, ~1.4 s
+release) so a quiet microphone and a loud monitor both fill the grid. `BAND_FLOOR`
+and `LEVEL_FLOOR` are the knobs: too low and silence flickers, too high and a
+quiet source looks dead.
+
+### Testing sound without playing anything aloud
+
+Load a null sink, play into it, record its monitor — nothing reaches the speakers,
+and the source name is known:
+
+```bash
+pactl load-module module-null-sink sink_name=flashtest
+paplay --device=flashtest tone.wav &
+cargo run -p flash-dance-audio --example meter -- flashtest.monitor
+pactl unload-module module-null-sink        # put it back
+```
+
+The `meter` example prints the analysis as text, which is how the bands were
+checked against known tones (480 Hz lights band 3, 7680 Hz band 7) and how the
+freeze above was spotted. Expect a second or two of silence at the start: a
+suspended sink takes that long to resume. Combine it with the MIDI injection below
+and the whole sound path is testable with no hands and no speakers.
+
 ## Working on this
 
 ```bash
-cargo test --workspace   # 3 unit tests: pad<->xy mapping, SysEx encoding, MIDI parsing
+cargo test --workspace   # 15 unit tests: pads, colour, grid, rng, clock, SysEx,
+                         # parsing, FFT, bands, gain
 cargo clippy --workspace --all-targets
 cargo fmt
-cargo run -p paint       # an app, needs the device plugged in
+cargo run -p effects     # any app; needs the device plugged in
+cargo run -p effects -- fire   # start on one effect, no hands needed
 ```
 
 Build needs ALSA headers on Linux (`libasound2-dev`).
 
-**The tests do not touch hardware, and they cannot.** They cover the pure
-functions — index arithmetic, byte encoding, message parsing — which is where the
-bugs actually live. Anything past that (does the right LED light, does a press
-arrive) needs the physical device and a human looking at it. Do not claim LED or
-button behaviour is verified because `cargo test` passed; run the app, and say
-plainly that a person has to confirm what they saw.
+**The unit tests do not touch hardware.** They cover the pure functions — index
+arithmetic, colour, byte encoding, message parsing — which is where most bugs live.
+Do not claim LED behaviour is verified because `cargo test` passed.
+
+### Testing input without hands on the device
+
+You can deliver a real button press to a running app, which makes the whole input
+path testable from a terminal. Start the app, find the ALSA client that `midir`
+opened for it, and play a MIDI file at it:
+
+```bash
+./target/debug/palette &
+PORT=$(aconnect -l | grep -i launchpad-in | sed -E 's/client ([0-9]+):.*/\1/')
+aplaymidi -p "$PORT:0" tap.mid    # e.g. 90 51 64 = press grid pad (0,0)
+```
+
+Note the port is a *destination*, so it shows up in `aconnect -l` and `aconnect -o`
+but **not** in `aconnect -i`. Pick an app that prints what it received — `palette`
+prints the index of every pad tapped — and you get an assertable result. This is
+how the grid-press and quit-button paths were verified, along with `effects`
+reporting 29.9 fps against a requested 30.
+
+What this still cannot check is **what the device looks like**: colour, brightness,
+gamma, whether an animation reads as fire or as noise. That needs the hardware and
+a person watching it. Say so plainly rather than implying the visuals are verified.
 
 ### Gotcha: killing the process leaves the device lit
 
@@ -132,7 +289,9 @@ amidi -l                                            # find the ",1" port
 amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 0E 00 F7'   # back to standalone mode
 ```
 
-Prefer a quit button (as the demo does) over Ctrl+C when running interactively.
+Every app has a quit button — top-left, except `effects` and `snake`, which use the
+arrows for their own controls and so quit with Stop/Solo/Mute (`Pad::right(7)`).
+Prefer it over Ctrl+C.
 
 ## Repo conventions
 
@@ -142,5 +301,5 @@ Prefer a quit button (as the demo does) over Ctrl+C when running interactively.
   kind** in commits, branches, PRs or issues.
 - `origin` is `davidgomesdev/flash-dance` (private). Push the branch and open a PR
   with `gh pr create`; leave the merge to a human.
-- Keep it small. The bar for a new dependency, file, or abstraction here is that
-  the existing ~200 lines genuinely cannot do the job.
+- Keep it small. `midir` is still the only external dependency, and the bar for a
+  second one is that the existing code genuinely cannot do the job.

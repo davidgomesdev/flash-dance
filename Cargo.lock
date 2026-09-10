@@ -140,6 +140,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "effects"
+version = "0.1.0"
+dependencies = [
+ "flash-dance",
+ "flash-dance-audio",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -151,6 +159,10 @@ version = "0.1.0"
 dependencies = [
  "midir",
 ]
+
+[[package]]
+name = "flash-dance-audio"
+version = "0.1.0"
 
 [[package]]
 name = "futures-core"
@@ -280,6 +292,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "life"
+version = "0.1.0"
+dependencies = [
+ "flash-dance",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,6 +369,13 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "paint"
+version = "0.1.0"
+dependencies = [
+ "flash-dance",
+]
+
+[[package]]
+name = "palette"
 version = "0.1.0"
 dependencies = [
  "flash-dance",
@@ -455,6 +481,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "simon"
+version = "0.1.0"
+dependencies = [
+ "flash-dance",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,6 +498,13 @@ name = "smallvec"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
+
+[[package]]
+name = "snake"
+version = "0.1.0"
+dependencies = [
+ "flash-dance",
+]
 
 [[package]]
 name = "syn"
@@ -577,6 +617,13 @@ checksum = "9fbddc4a036f00ec4f18c83445bd3115cb306a91da554919a099d9222fe4a7f8"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "whack"
+version = "0.1.0"
+dependencies = [
+ "flash-dance",
 ]
 
 [[package]]
