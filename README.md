@@ -26,9 +26,9 @@ starfield, colour wipe.
 **Reactive:** ripple on press, comet trail, velocity heat (colour by how hard you
 hit), lasers, gravity, pressure map.
 
-Controls: **Session** opens the picker, the **arrows** change speed (up and right
-faster, down and left slower), and **Stop/Solo/Mute** quits. The right column shows
-the current speed — blue below 1x, green at 1x, red above.
+Controls: **User** (top row, rightmost) opens the picker, the **arrows** change
+speed (up and right faster, down and left slower), and **Stop/Solo/Mute** quits.
+The right column shows the current speed — blue below 1x, green at 1x, red above.
 
 Effects run on a virtual clock, so speed scales everything they do: motion, decay
 trails and spawn rates alike. `pressure map` is the one effect with no time in it,
@@ -58,6 +58,11 @@ for event in events {
 `Launchpad::connect` returns the device plus a `Receiver<Event>` fed from the MIDI
 input callback, so events can be polled (`try_recv`) or blocked on. Dropping the
 `Launchpad` clears the LEDs and puts the device back in its standalone mode.
+
+It also turns the device's global brightness up to full. That is a persistent
+device setting — the same one on the Setup menu's LED page — so it stays that way
+after unplugging, and nothing here puts it back. `set_brightness` is the knob if
+you want it lower.
 
 Buttons are addressed the way the device does it in programmer mode — index
 `row * 10 + column` — with `Pad::xy` / `Pad::top` / `Pad::right` as the sane way in

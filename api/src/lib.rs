@@ -140,6 +140,7 @@ impl Launchpad {
             _input,
         };
         pad.set_programmer_mode(true)?;
+        pad.set_brightness(127)?;
         pad.clear()?;
         Ok((pad, rx))
     }
@@ -169,11 +170,27 @@ impl Launchpad {
         self.set_all(all)
     }
 
-    fn set_programmer_mode(&mut self, on: bool) -> Result<()> {
-        let mut msg = Vec::from(HEADER);
-        msg.extend([0x0E, on as u8, 0xF7]);
-        Ok(self.out.send(&msg)?)
+    /// Sets the global LED brightness, 0 (dimmest) to 127.
+    ///
+    /// This is the same setting as the Setup menu's LED page, and it **persists on
+    /// the device** — it survives unplugging, and nothing here puts it back.
+    /// [`Launchpad::connect`] turns it up to full, because a device left on a low
+    /// level makes every effect look broken in a way the code cannot explain.
+    pub fn set_brightness(&mut self, level: u8) -> Result<()> {
+        Ok(self.out.send(&command(&[0x08, level & 0x7F]))?)
     }
+
+    fn set_programmer_mode(&mut self, on: bool) -> Result<()> {
+        Ok(self.out.send(&command(&[0x0E, on as u8]))?)
+    }
+}
+
+/// Wraps a payload in the device's SysEx header and terminator.
+fn command(payload: &[u8]) -> Vec<u8> {
+    let mut msg = Vec::from(HEADER);
+    msg.extend(payload);
+    msg.push(0xF7);
+    msg
 }
 
 impl Drop for Launchpad {
@@ -429,6 +446,19 @@ mod tests {
         assert_eq!(Light::Flash { on: 5, off: 1 }.spec(Pad(11)), [1, 11, 1, 5]);
         assert_eq!(Light::Pulse(5).spec(Pad(11)), [2, 11, 5]);
         assert_eq!(Light::Rgb(127, 0, 64).spec(Pad(11)), [3, 11, 127, 0, 64]);
+    }
+
+    #[test]
+    fn commands_match_the_manual() {
+        // Launchpad Mini [MK3] Programmer's Reference, verbatim.
+        assert_eq!(
+            command(&[0x08, 127]),
+            [0xF0, 0x00, 0x20, 0x29, 0x02, 0x0D, 0x08, 0x7F, 0xF7]
+        );
+        assert_eq!(
+            command(&[0x0E, 1]),
+            [0xF0, 0x00, 0x20, 0x29, 0x02, 0x0D, 0x0E, 0x01, 0xF7]
+        );
     }
 
     #[test]

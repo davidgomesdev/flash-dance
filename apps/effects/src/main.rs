@@ -1,6 +1,6 @@
 //! Fourteen LED effects with a picker and a speed control.
 //!
-//! - **Session** (top row, 5th) opens the picker; tap a lit pad to choose.
+//! - **User** (top row, rightmost) opens the picker; tap a lit pad to choose.
 //! - **Arrows** change speed: up and right faster, down and left slower. The right
 //!   column shows the current speed, blue below 1x and red above.
 //! - **Stop/Solo/Mute** (bottom of the right column) quits.
@@ -11,7 +11,7 @@
 
 use flash_dance::{Clock, Event, Grid, Launchpad, Light, Pad, Result, Rng, hsv};
 
-const MENU: Pad = Pad(95); // top row, "Session"
+const MENU: Pad = Pad(98); // top row, rightmost, "User"
 const FPS: f64 = 30.0;
 
 fn quit_button() -> Pad {
@@ -478,7 +478,7 @@ fn main() -> Result<()> {
     app.reset(&mut pad)?;
     draw_speed(&mut pad, level)?;
     println!("{}", EFFECTS[current].name());
-    println!("(Session picks an effect, arrows change speed, Stop/Solo/Mute quits)");
+    println!("(User picks an effect, arrows change speed, Stop/Solo/Mute quits)");
 
     'running: loop {
         let now = clock.tick(&events, &mut queue);

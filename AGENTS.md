@@ -125,6 +125,28 @@ Colours for `Solid`/`Flash`/`Pulse` are **palette indices**, not RGB. The palett
 chart is in Novation's programmer reference; useful ones: 0 off, 3 white, 5 red,
 21 green, 37 cyan, 45 blue. `cargo run -p palette` browses the rest on the device.
 
+### Brightness is a device setting, and it was found at zero
+
+The device has a global brightness level, `F0 00 20 29 02 0D 08 <0-127> F7`, which
+scales every LED. **If effects look dim, check this before touching any code.**
+The first time it was read on this hardware it came back `00` — the minimum — which
+made everything look washed out for reasons nothing in the source could explain.
+
+It has a readback variant, so you can measure it rather than guess:
+
+```bash
+amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 08 F7' -d -t 1
+#   -> F0002029020D08 <level> F7
+```
+
+`connect` now sets it to 127. Note this **persists on the device** across
+unplugging — it is the Setup menu's LED level — and nothing restores the old value,
+because reading it back would mean parsing SysEx replies that `Event` deliberately
+drops. `set_brightness` is the knob.
+
+Brightness and `GAMMA` are different knobs and worth not confusing: brightness
+scales everything, gamma changes only how the midtones sit between off and full.
+
 ### Throughput: fast enough, and with no backpressure
 
 Measured, not guessed:
