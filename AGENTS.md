@@ -202,7 +202,7 @@ capture crate (`cpal` and friends) gives you input devices and stops, and would
 have been the project's second dependency. `parec` makes it zero: `audio/` has no
 dependencies at all, FFT included.
 
-Three things in there were found the hard way:
+Four things in there were found the hard way:
 
 - **`--latency-msec=25` is load-bearing.** Without it `parec` hands over about a
   second of audio in one go, and since the ring only keeps the newest 2048 samples
@@ -211,6 +211,12 @@ Three things in there were found the hard way:
 - **The reader thread must read whole samples.** It uses `read_exact` on an
   even-sized buffer; a short read that split one 16-bit sample would shift every
   byte after it and turn the rest of the stream into noise.
+- **`XDG_RUNTIME_DIR` may not be set.** It is how libpulse finds its socket, and
+  a process started outside a login session — a systemd unit, a cron job, an
+  agent's shell — has none. The failure is `pa_context_connect() failed:
+  Connection refused`, which reads like a dead sound server and is not one. The
+  crate fills in the spec's own default, `/run/user/<uid>`, and never overrides an
+  existing value.
 - **`WINDOW` is 2048, not 1024.** The lowest band is 40–80 Hz, and at 1024 samples
   that octave gets two bins, so a 60 Hz note lands in the wrong band. The window
   always ends on the newest sample, so the extra length costs no latency on an
