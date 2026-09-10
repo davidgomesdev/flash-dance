@@ -4,11 +4,30 @@ A small Rust API for the Novation Launchpad Mini MK3 over USB MIDI: set the butt
 LEDs, receive the button presses. The lights flash, the pads get danced on.
 
 A cargo workspace: `api/` is the library, `apps/*` are the things built on it.
+Every app quits with the top-left button (except `snake` — see below).
 
-```
-api/          the flash-dance crate — LEDs and button events
-apps/paint/   cargo run -p paint — tap pads to toggle them, top-right quits
-```
+| | |
+|---|---|
+| `cargo run -p effects` | 17 LED effects; top-right button opens the picker |
+| `cargo run -p paint` | tap pads to toggle them |
+| `cargo run -p palette` | browse the device's 128 palette colours, print indices |
+| `cargo run -p whack` | whack-a-mole |
+| `cargo run -p simon` | Simon, played on four 4x4 quadrants |
+| `cargo run -p snake` | snake, steered with the arrow buttons — **quits with the bottom scene button**, since the arrows occupy the top-left corner |
+| `cargo run -p life` | Conway's life: tap to draw, right column runs, reseeds, clears |
+
+### The effects
+
+`cargo run -p effects -- fire` starts on a named effect instead of the first.
+
+**On the device's own clock** (one message, no host work): pulse wash, checkerboard
+flash, breathing border.
+
+**Ambient:** rainbow diagonal, plasma, fire, rain, ripple rings, radar sweep,
+starfield, colour wipe.
+
+**Reactive:** ripple on press, comet trail, velocity heat (colour by how hard you
+hit), lasers, gravity, pressure map.
 
 ## Usage
 
@@ -39,6 +58,35 @@ and `Pad::to_xy` as the way back out. `Light::Solid`, `Flash` and `Pulse` take
 palette indices (`0..128`, see Novation's programmer reference for the chart);
 `Light::Rgb` takes 7-bit channels. `set_all` batches any number of LEDs into a
 single SysEx message, which matters if you are animating.
+
+## Animating
+
+`Grid` is a frame buffer of linear-light colour; `Clock` paces frames while still
+delivering presses the instant they arrive. Together they are the whole animation
+loop — no threads, no async:
+
+```rust
+let (mut pad, events) = Launchpad::connect()?;
+let (mut grid, mut clock, mut queue) = (Grid::new(), Clock::new(30.0), Vec::new());
+
+loop {
+    let t = clock.tick(&events, &mut queue);   // blocks on events until the frame is due
+    for (x, y) in (0..8).flat_map(|y| (0..8).map(move |x| (x, y))) {
+        grid.set(x, y, hsv((x + y) as f32 / 14.0 + t * 0.2, 1.0, 1.0));
+    }
+    pad.set_all(grid.lights())?;               // one SysEx message
+}
+```
+
+Grid colour is linear `0.0..=1.0` per channel and gets gamma-corrected (`GAMMA`)
+on the way out, because the LEDs are perceptually non-linear — send a linear ramp
+raw and every fade looks like it snaps off early. Writes outside the grid are
+ignored, so effects that ripple and scroll off the edges need no bounds checks.
+
+The device drains about 85 KB/s, so a full 64-pad RGB frame (330 bytes) costs
+~3.8 ms and the ceiling is roughly 265 fps. Nothing in the path applies
+backpressure, though — `set_all` returns long before the device has caught up — so
+pace with `Clock` rather than sending as fast as the calls return.
 
 Requires ALSA on Linux (`libasound2-dev` to build).
 

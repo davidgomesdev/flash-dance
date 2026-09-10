@@ -10,8 +10,15 @@ MK3** over USB MIDI: set the LEDs under its 8x8 grid, top row and right column,
 and receive button presses. One external dependency, `midir`.
 
 ```
-api/src/lib.rs          the `flash-dance` crate, ~200 lines: Pad, Light, Event, Launchpad
-apps/paint/src/main.rs  an app: tap grid pads to toggle them, top-right button quits
+api/           the `flash-dance` crate: the MIDI driver, plus the drawing
+               primitives every app shares (Grid, hsv, Clock, Rng)
+apps/effects/  17 LED effects with a picker; `-- <name>` starts on one
+apps/paint/    tap grid pads to toggle them
+apps/palette/  browse the device's 128 palette colours and print indices
+apps/whack/    whack-a-mole
+apps/simon/    Simon, on four 4x4 quadrants
+apps/snake/    snake, steered with the device's arrow buttons
+apps/life/     Conway's life, drawable and self-reseeding
 ```
 
 The split exists so the API stays publishable and the apps stay throwaway. `api/`
@@ -26,9 +33,31 @@ Add one with `cargo new --bin apps/<name>`. Apps do not depend on each other; if
 two of them want the same helper, it belongs in the API.
 
 Inside the API there is deliberately no module tree, no error enum, no trait
-abstraction. The device has one model and one protocol; adding layers for a second
-one that does not exist is the wrong move. If you are asked to support a Launchpad
-Pro or MK2, that is the point to generalise — not before.
+abstraction, and **no `Effect` trait** — effects are plain methods on one flat
+struct in `apps/effects`, and adding a seventeen-implementation trait to hold them
+would buy nothing. The device has one model and one protocol; if you are asked to
+support a Launchpad Pro or MK2, that is the point to generalise — not before.
+
+### Drawing primitives
+
+`Grid` is a frame buffer of **linear** colour that effects write and
+`Launchpad::set_all` consumes via `Grid::lights()`. Two things about it matter:
+
+- Coordinates are `i32` and off-grid reads and writes are silently ignored. Effects
+  that ripple, sweep and scroll compute out-of-bounds constantly; bounds-checking
+  each one at the call site was pure noise.
+- Colour is linear `0.0..=1.0` internally and gamma-encoded once on the way out
+  (`GAMMA`, 2.2). Fades, `add` and `fade` are arithmetic that only behaves in
+  linear light, and a linear ramp sent raw to the LEDs looks like it snaps off
+  early. **Do not send `Light::Rgb` computed by hand for anything that fades** —
+  go through `Grid`, or reproduce the gamma step yourself.
+
+`Clock::tick` is the frame loop: it spends the gap between frames blocking on the
+event channel, so an effect renders on schedule and still sees presses immediately.
+No threads, no async. `Clock::fps()` reports what was actually achieved.
+
+`Rng` is a six-line xorshift, in the API rather than in each app because apps share
+code only through this crate and `rand` would be a dependency tree in exchange.
 
 ## How the device actually works
 
@@ -88,7 +117,23 @@ animating; batching does not.
 
 Colours for `Solid`/`Flash`/`Pulse` are **palette indices**, not RGB. The palette
 chart is in Novation's programmer reference; useful ones: 0 off, 3 white, 5 red,
-21 green, 37 cyan, 45 blue.
+21 green, 37 cyan, 45 blue. `cargo run -p palette` browses the rest on the device.
+
+### Throughput: fast enough, and with no backpressure
+
+Measured, not guessed:
+
+| | |
+|---|---|
+| Device drain rate | **~85 KB/s** (22 KB and 110 KB bursts through rawmidi agreed) |
+| Full 64-pad RGB frame | 330 bytes, ~3.8 ms |
+| Ceiling for full frames | **~265 fps** — 30 fps uses about 12% of the link |
+
+So the link is not the constraint, but **`set_all` never blocks**: 20 000 frames
+(6.6 MB) went out through midir in 0.74 s, which is 9 MB/s and far beyond what the
+device can consume. There is no flow control anywhere in the path, so sending
+faster than the device drains does not push back — it silently builds latency or
+loses frames. Pace with `Clock`; do not treat a returning `set_all` as delivery.
 
 ### Input: notes and CCs, velocity 0 means release
 
@@ -106,20 +151,40 @@ events stop, so it must not be discarded.
 ## Working on this
 
 ```bash
-cargo test --workspace   # 3 unit tests: pad<->xy mapping, SysEx encoding, MIDI parsing
+cargo test --workspace   # 7 unit tests: pads, colour, grid, rng, clock, SysEx, parsing
 cargo clippy --workspace --all-targets
 cargo fmt
-cargo run -p paint       # an app, needs the device plugged in
+cargo run -p effects     # any app; needs the device plugged in
+cargo run -p effects -- fire   # start on one effect, no hands needed
 ```
 
 Build needs ALSA headers on Linux (`libasound2-dev`).
 
-**The tests do not touch hardware, and they cannot.** They cover the pure
-functions — index arithmetic, byte encoding, message parsing — which is where the
-bugs actually live. Anything past that (does the right LED light, does a press
-arrive) needs the physical device and a human looking at it. Do not claim LED or
-button behaviour is verified because `cargo test` passed; run the app, and say
-plainly that a person has to confirm what they saw.
+**The unit tests do not touch hardware.** They cover the pure functions — index
+arithmetic, colour, byte encoding, message parsing — which is where most bugs live.
+Do not claim LED behaviour is verified because `cargo test` passed.
+
+### Testing input without hands on the device
+
+You can deliver a real button press to a running app, which makes the whole input
+path testable from a terminal. Start the app, find the ALSA client that `midir`
+opened for it, and play a MIDI file at it:
+
+```bash
+./target/debug/palette &
+PORT=$(aconnect -l | grep -i launchpad-in | sed -E 's/client ([0-9]+):.*/\1/')
+aplaymidi -p "$PORT:0" tap.mid    # e.g. 90 51 64 = press grid pad (0,0)
+```
+
+Note the port is a *destination*, so it shows up in `aconnect -l` and `aconnect -o`
+but **not** in `aconnect -i`. Pick an app that prints what it received — `palette`
+prints the index of every pad tapped — and you get an assertable result. This is
+how the grid-press and quit-button paths were verified, along with `effects`
+reporting 29.9 fps against a requested 30.
+
+What this still cannot check is **what the device looks like**: colour, brightness,
+gamma, whether an animation reads as fire or as noise. That needs the hardware and
+a person watching it. Say so plainly rather than implying the visuals are verified.
 
 ### Gotcha: killing the process leaves the device lit
 
@@ -132,7 +197,8 @@ amidi -l                                            # find the ",1" port
 amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 0E 00 F7'   # back to standalone mode
 ```
 
-Prefer a quit button (as the demo does) over Ctrl+C when running interactively.
+Every app has a quit button — top-left, except `snake`, where the arrows own that
+corner and the bottom scene button quits instead. Prefer it over Ctrl+C.
 
 ## Repo conventions
 
@@ -142,5 +208,5 @@ Prefer a quit button (as the demo does) over Ctrl+C when running interactively.
   kind** in commits, branches, PRs or issues.
 - `origin` is `davidgomesdev/flash-dance` (private). Push the branch and open a PR
   with `gh pr create`; leave the merge to a human.
-- Keep it small. The bar for a new dependency, file, or abstraction here is that
-  the existing ~200 lines genuinely cannot do the job.
+- Keep it small. `midir` is still the only external dependency, and the bar for a
+  second one is that the existing code genuinely cannot do the job.
