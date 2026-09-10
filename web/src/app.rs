@@ -1,6 +1,6 @@
 //! The site: pick an effect, see what is running, stop it.
 //!
-//! Everything the page knows comes from the `effects` binary — the list, the
+//! Everything the page knows comes from `flash-dance-effects` — the list, the
 //! grouping, even the colour of each card, which is the hue that effect's pad has
 //! in the device's own picker. Speed and brightness are deliberately absent: they
 //! live on the Launchpad's arrow buttons, where your hands already are.
@@ -12,7 +12,7 @@ use leptos_router::components::{Route, Router, Routes};
 use leptos_router::path;
 use serde::{Deserialize, Serialize};
 
-/// One effect, as the binary described it.
+/// One effect, as the effects library describes it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectInfo {
     pub group: String,
@@ -40,14 +40,14 @@ impl SourceInfo {
     }
 }
 
-/// What the server's child process is doing.
+/// What the server's effect session is doing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Status {
     #[default]
     Idle,
     Running(String),
-    /// The binary exited badly — no device plugged in, most often — and this is
-    /// what it said on the way out.
+    /// The session ended with an error — no device plugged in, most often — and
+    /// this is what it was.
     Failed {
         effect: String,
         error: String,
@@ -56,7 +56,7 @@ pub enum Status {
 
 #[server]
 pub async fn list_effects() -> Result<Vec<EffectInfo>, ServerFnError> {
-    crate::runner::effects().map_err(ServerFnError::new)
+    Ok(crate::runner::effects())
 }
 
 #[server]
@@ -192,7 +192,11 @@ fn Console() -> impl IntoView {
                 </p>
             </section>
 
-            <Suspense fallback=|| view! { <p class="empty">"Asking the binary…"</p> }>
+            // A Transition, not a Suspense: every card reads the status the page
+            // polls, and a Suspense falls back to this placeholder on *every* reload
+            // of what it reads — which tore down and rebuilt the whole grid once a
+            // poll, and looked like the page refreshing itself.
+            <Transition fallback=|| view! { <p class="empty">"Loading effects…"</p> }>
                 {move || Suspend::new(async move {
                     match effects.await {
                         Err(e) => {
@@ -230,12 +234,12 @@ fn Console() -> impl IntoView {
                         }
                     }
                 })}
-            </Suspense>
+            </Transition>
         </main>
     }
 }
 
-/// The three kinds the binary reports, in the order they are worth reading.
+/// The three kinds the library reports, in the order they are worth reading.
 const GROUPS: [(&str, &str); 3] = [
     ("ambient", "A function of time. Nothing to do but watch."),
     ("reactive", "Driven by the pads: press them."),

@@ -17,6 +17,7 @@ leptos_axum = { version = "0.8", optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"], optional = true }
 flash-dance-audio = { workspace = true, optional = true }
+flash-dance-effects = { workspace = true, optional = true }
 
 wasm-bindgen = { version = "0.2", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
@@ -34,4 +35,5 @@ ssr = [
     "dep:axum",
     "dep:tokio",
     "dep:flash-dance-audio",
+    "dep:flash-dance-effects",
 ]

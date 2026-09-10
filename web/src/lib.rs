@@ -1,9 +1,9 @@
-//! A website for the `effects` binary: a page of cards, one per effect, that
-//! starts and stops it on the machine the server is running on.
+//! A website for the effects: a page of cards, one per effect, that starts and
+//! stops them on the machine the server is running on.
 //!
-//! The server renders and hydrates with Leptos, and owns exactly one child
-//! process, because the Launchpad has exactly one MIDI port. See [`runner`] for
-//! why stopping goes through a closed pipe rather than a signal.
+//! The server renders and hydrates with Leptos, and runs effects in-process
+//! through `flash-dance-effects` — one session at a time, on a thread of its own,
+//! because the Launchpad has exactly one MIDI port. See [`runner`].
 
 pub mod app;
 

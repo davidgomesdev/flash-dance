@@ -27,8 +27,9 @@ async fn main() {
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
-            // Ctrl+C would otherwise leave the effect running, holding the MIDI
-            // port and the device lit — its stdin closing is what stops it.
+            // Stop the session and wait for it, so its `Drop` clears the LEDs and
+            // leaves programmer mode before the process goes. A SIGKILL skips this
+            // and leaves the device lit — nothing in-process can help with that.
             flash_dance_web::runner::stop();
         })
         .await

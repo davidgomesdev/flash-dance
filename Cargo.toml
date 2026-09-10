@@ -1,10 +1,11 @@
 [workspace]
-members = ["api", "audio", "web", "apps/*"]
+members = ["api", "audio", "effects", "web", "apps/*"]
 resolver = "3"
 
 [workspace.dependencies]
 flash-dance = { path = "api" }
 flash-dance-audio = { path = "audio" }
+flash-dance-effects = { path = "effects" }
 midir = "0.11.0"
 
 # cargo-leptos builds the web crate twice: the server natively, the same lib to

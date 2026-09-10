@@ -44,8 +44,11 @@ trails and spawn rates alike. Speed does nothing to the ones with no time in the
 — `pressure map`, `spectrum` and `vu meter`, which are only ever a picture of
 their input.
 
-`cargo run -p effects -- fire` starts on a named effect instead of the first, and
-`cargo run -p effects -- --list` prints them without touching the device.
+`cargo run -p effects -- fire` starts on a named effect instead of the first.
+
+The effects themselves are a library, `flash-dance-effects`: `run(effect, source,
+stop)` is the whole session — picker, arrows and quit button included — and the
+`effects` binary is a few lines of argument parsing around it.
 
 ## The website
 
@@ -59,21 +62,19 @@ A page of cards, one per effect, in the same colour that effect's pad has in the
 device's own picker. Click one and it runs; click another and it switches; the bar
 at the top says what is going and stops it.
 
-It is a front end for the binary rather than a second implementation: the list,
-the grouping and the colours all come from `effects --list`, so the site cannot
-drift out of step with what the device can do, and every effect is the same
-process you would have started from a terminal. Only one runs at a time, because
-the Launchpad has one MIDI port.
+The server runs effects in-process through `flash-dance-effects` — the list, the
+grouping and the colours come from the same library, and an effect started here
+is the very session the `effects` binary runs, on a thread of its own. Only one
+runs at a time, because the Launchpad has one MIDI port.
 
 The one setting on the page is which audio source the sound effects listen to.
 Speed and brightness are deliberately missing: they belong on the device's arrow
 buttons, where your hands already are.
 
-Stopping — the button, switching effects, or quitting the server — closes the
-binary's stdin, which makes it break its loop and exit through its own `Drop`.
-That matters: a signal would end it without clearing the LEDs or leaving
-programmer mode. It also means an effect cannot outlive the server that started
-it.
+Stopping — the button, switching effects, or Ctrl+C on the server — sets the
+session's stop flag and waits for it to return, so its `Drop` clears the LEDs and
+leaves programmer mode. A `kill -9` of the server skips that and leaves the device
+lit, the same as for any app.
 
 ## Listening
 
