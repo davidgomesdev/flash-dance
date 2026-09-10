@@ -1,9 +1,16 @@
-//! Fourteen LED effects with a picker and a speed control.
+//! Fourteen LED effects with a picker, a speed control and a brightness control.
 //!
 //! - **User** (top row, rightmost) opens the picker; tap a lit pad to choose.
-//! - **Arrows** change speed: up and right faster, down and left slower. The right
-//!   column shows the current speed, blue below 1x and red above.
+//! - **Up / down** change brightness. No on-screen indicator: the whole grid gets
+//!   brighter or dimmer, which is the indicator.
+//! - **Left / right** change speed. The right column shows it, blue below 1x,
+//!   green at 1x, red above.
 //! - **Stop/Solo/Mute** (bottom of the right column) quits.
+//!
+//! Both settings are global — they survive switching effects, because they live
+//! out here rather than in the per-effect state that [`App::reset`] wipes.
+//! Brightness is global in a stronger sense too: it is a setting on the device
+//! itself, so whatever it is left at persists after the app exits.
 //!
 //! Effects run on a virtual clock, so changing speed scales everything they do —
 //! motion, decay trails, spawn rates — rather than only the ones written against a
@@ -21,6 +28,11 @@ fn quit_button() -> Pad {
 /// Discrete speeds, one per LED of the speed bar. Index 3 is normal.
 const SPEEDS: [f32; 7] = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 const NORMAL_SPEED: usize = 3;
+
+/// Device brightness levels, matching the eight the Setup menu offers. Starts at
+/// the top: the device is often found near the bottom of this range, which makes
+/// every effect look broken for reasons the code cannot explain.
+const BRIGHTNESS: [u8; 8] = [16, 32, 48, 64, 80, 96, 112, 127];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Effect {
@@ -406,14 +418,28 @@ fn presses(events: &[Event]) -> impl Iterator<Item = (i32, i32, u8)> + '_ {
     })
 }
 
-/// The Mini MK3's top row starts with up, down, left, right. Up and right speed
-/// things up, down and left slow them down, so either mental model works.
-fn speed_nudge(button: Pad) -> Option<i32> {
+/// What an arrow does. The Mini MK3's top row starts with up, down, left, right:
+/// the vertical pair is brightness, the horizontal pair is speed.
+enum Nudge {
+    Brightness(i32),
+    Speed(i32),
+}
+
+fn nudge(button: Pad) -> Option<Nudge> {
     match button {
-        b if b == Pad::top(0) || b == Pad::top(3) => Some(1),
-        b if b == Pad::top(1) || b == Pad::top(2) => Some(-1),
+        b if b == Pad::top(0) => Some(Nudge::Brightness(1)),
+        b if b == Pad::top(1) => Some(Nudge::Brightness(-1)),
+        b if b == Pad::top(2) => Some(Nudge::Speed(-1)),
+        b if b == Pad::top(3) => Some(Nudge::Speed(1)),
         _ => None,
     }
+}
+
+/// Steps an index within `len`, returning `None` when it is already at the end so
+/// the caller can stay quiet rather than reprinting a setting that did not move.
+fn step(index: usize, by: i32, len: usize) -> Option<usize> {
+    let moved = (index as i32 + by).clamp(0, len as i32 - 1) as usize;
+    (moved != index).then_some(moved)
 }
 
 /// Speed as a bar up the right column, leaving the bottom button as quit.
@@ -473,12 +499,15 @@ fn main() -> Result<()> {
     let mut queue = Vec::new();
     let (mut current, mut picking) = (starting_effect(), false);
     let (mut wall, mut virtual_time) = (0.0f32, 0.0f32);
+    // Global: both outlive a change of effect.
     let mut level = NORMAL_SPEED;
+    let mut brightness = BRIGHTNESS.len() - 1;
 
     app.reset(&mut pad)?;
+    pad.set_brightness(BRIGHTNESS[brightness])?;
     draw_speed(&mut pad, level)?;
     println!("{}", EFFECTS[current].name());
-    println!("(User picks an effect, arrows change speed, Stop/Solo/Mute quits)");
+    println!("(User picks an effect, up/down brightness, left/right speed, Stop/Solo/Mute quits)");
 
     'running: loop {
         let now = clock.tick(&events, &mut queue);
@@ -495,16 +524,26 @@ fn main() -> Result<()> {
             if button == quit_button() {
                 break 'running;
             }
-            if let Some(step) = speed_nudge(button) {
-                let moved = (level as i32 + step).clamp(0, SPEEDS.len() as i32 - 1) as usize;
-                if moved != level {
-                    level = moved;
-                    println!("speed {}x", SPEEDS[level]);
+            match nudge(button) {
+                Some(Nudge::Brightness(by)) => {
+                    if let Some(moved) = step(brightness, by, BRIGHTNESS.len()) {
+                        brightness = moved;
+                        pad.set_brightness(BRIGHTNESS[brightness])?;
+                        println!("brightness {}", BRIGHTNESS[brightness]);
+                    }
+                    continue;
                 }
-                if !picking {
-                    draw_speed(&mut pad, level)?;
+                Some(Nudge::Speed(by)) => {
+                    if let Some(moved) = step(level, by, SPEEDS.len()) {
+                        level = moved;
+                        println!("speed {}x", SPEEDS[level]);
+                        if !picking {
+                            draw_speed(&mut pad, level)?;
+                        }
+                    }
+                    continue;
                 }
-                continue;
+                None => {}
             }
             if button == MENU {
                 picking = !picking;

@@ -26,9 +26,14 @@ starfield, colour wipe.
 **Reactive:** ripple on press, comet trail, velocity heat (colour by how hard you
 hit), lasers, gravity, pressure map.
 
-Controls: **User** (top row, rightmost) opens the picker, the **arrows** change
-speed (up and right faster, down and left slower), and **Stop/Solo/Mute** quits.
-The right column shows the current speed — blue below 1x, green at 1x, red above.
+Controls: **User** (top row, rightmost) opens the picker, **up/down** change
+brightness, **left/right** change speed, and **Stop/Solo/Mute** quits. The right
+column shows the speed — blue below 1x, green at 1x, red above. Brightness needs no
+indicator, since the whole grid is one.
+
+Both are global: they carry across a change of effect. Brightness is global in a
+stronger sense — it is a setting on the device itself, so wherever you leave it is
+where it stays after the app exits.
 
 Effects run on a virtual clock, so speed scales everything they do: motion, decay
 trails and spawn rates alike. `pressure map` is the one effect with no time in it,
