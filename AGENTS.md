@@ -12,7 +12,9 @@ and receive button presses. One external dependency, `midir`.
 ```
 api/           the `flash-dance` crate: the MIDI driver, plus the drawing
                primitives every app shares (Grid, hsv, Clock, Rng)
-apps/effects/  14 LED effects, a picker and a speed control; `-- <name>` starts on one
+audio/         the `flash-dance-audio` crate: sound in, a level, eight bands
+               and a beat out. Nothing here knows about Launchpads
+apps/effects/  18 LED effects, a picker and a speed control; `-- <name>` starts on one
 apps/paint/    tap grid pads to toggle them
 apps/palette/  browse the device's 128 palette colours and print indices
 apps/whack/    whack-a-mole
@@ -23,7 +25,9 @@ apps/life/     Conway's life, drawable and self-reseeding
 
 The split exists so the API stays publishable and the apps stay throwaway. `api/`
 is the only crate that talks MIDI or knows the SysEx protocol; **an app must never
-send raw bytes to the device.** If an app needs something the API cannot express,
+send raw bytes to the device.** `audio/` depends on neither and knows nothing about
+the device — an effect is where a sound becomes a colour, and that is the only
+place the two meet. If an app needs something the API cannot express,
 add it to the API — that is the signal the API is missing something, not a licence
 to reach around it.
 
@@ -188,10 +192,58 @@ velocity sensitive; the edge buttons always report 127.
 alive in the `Launchpad` struct as `_input` — dropping it closes the port and the
 events stop, so it must not be discarded.
 
+## Sound
+
+`audio/` captures by spawning **`parec`**, not by binding an audio library. That
+is a deliberate trade and worth understanding before replacing it: PulseAudio and
+PipeWire expose an output's `.monitor` as an ordinary source, so *system sound
+costs exactly as much code as a microphone* — one name in one argument. A portable
+capture crate (`cpal` and friends) gives you input devices and stops, and would
+have been the project's second dependency. `parec` makes it zero: `audio/` has no
+dependencies at all, FFT included.
+
+Three things in there were found the hard way:
+
+- **`--latency-msec=25` is load-bearing.** Without it `parec` hands over about a
+  second of audio in one go, and since the ring only keeps the newest 2048 samples
+  the analysis *freezes* between deliveries — a spectrum that holds one shape for a
+  second, then jumps. It looks like a hung thread and is not one.
+- **The reader thread must read whole samples.** It uses `read_exact` on an
+  even-sized buffer; a short read that split one 16-bit sample would shift every
+  byte after it and turn the rest of the stream into noise.
+- **`WINDOW` is 2048, not 1024.** The lowest band is 40–80 Hz, and at 1024 samples
+  that octave gets two bins, so a 60 Hz note lands in the wrong band. The window
+  always ends on the newest sample, so the extra length costs no latency on an
+  onset — a kick is just averaged with a little more of what came before it.
+
+Everything comes out `0.0..=1.0` through a running gain (fast attack, ~1.4 s
+release) so a quiet microphone and a loud monitor both fill the grid. `BAND_FLOOR`
+and `LEVEL_FLOOR` are the knobs: too low and silence flickers, too high and a
+quiet source looks dead.
+
+### Testing sound without playing anything aloud
+
+Load a null sink, play into it, record its monitor — nothing reaches the speakers,
+and the source name is known:
+
+```bash
+pactl load-module module-null-sink sink_name=flashtest
+paplay --device=flashtest tone.wav &
+cargo run -p flash-dance-audio --example meter -- flashtest.monitor
+pactl unload-module module-null-sink        # put it back
+```
+
+The `meter` example prints the analysis as text, which is how the bands were
+checked against known tones (480 Hz lights band 3, 7680 Hz band 7) and how the
+freeze above was spotted. Expect a second or two of silence at the start: a
+suspended sink takes that long to resume. Combine it with the MIDI injection below
+and the whole sound path is testable with no hands and no speakers.
+
 ## Working on this
 
 ```bash
-cargo test --workspace   # 7 unit tests: pads, colour, grid, rng, clock, SysEx, parsing
+cargo test --workspace   # 15 unit tests: pads, colour, grid, rng, clock, SysEx,
+                         # parsing, FFT, bands, gain
 cargo clippy --workspace --all-targets
 cargo fmt
 cargo run -p effects     # any app; needs the device plugged in

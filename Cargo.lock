@@ -144,6 +144,7 @@ name = "effects"
 version = "0.1.0"
 dependencies = [
  "flash-dance",
+ "flash-dance-audio",
 ]
 
 [[package]]
@@ -158,6 +159,10 @@ version = "0.1.0"
 dependencies = [
  "midir",
 ]
+
+[[package]]
+name = "flash-dance-audio"
+version = "0.1.0"
 
 [[package]]
 name = "futures-core"

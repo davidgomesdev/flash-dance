@@ -6,3 +6,4 @@ publish = false
 
 [dependencies]
 flash-dance = { workspace = true }
+flash-dance-audio = { workspace = true }

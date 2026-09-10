@@ -1,4 +1,7 @@
-//! Fourteen LED effects with a picker, a speed control and a brightness control.
+//! Eighteen LED effects with a picker, a speed control and a brightness control.
+//!
+//! Four of them listen: `FLASH_DANCE_SOURCE` picks what to, by any part of a
+//! PulseAudio source name, and the default is whatever the machine is playing.
 //!
 //! - **User** (top row, rightmost) opens the picker; tap a lit pad to choose.
 //! - **Up / down** change brightness. No on-screen indicator: the whole grid gets
@@ -17,6 +20,7 @@
 //! wall clock. `pressure map` is the one effect with no time in it at all.
 
 use flash_dance::{Clock, Event, Grid, Launchpad, Light, Pad, Result, Rng, hsv};
+use flash_dance_audio::{Audio, Sound};
 
 const MENU: Pad = Pad(98); // top row, rightmost, "User"
 const FPS: f64 = 30.0;
@@ -52,11 +56,16 @@ enum Effect {
     Lasers,
     Gravity,
     PressureMap,
+    // Sound: driven by what the machine hears.
+    Spectrum,
+    VuMeter,
+    BeatRings,
+    SoundFire,
 }
 
 use Effect::*;
 
-const EFFECTS: [Effect; 14] = [
+const EFFECTS: [Effect; 18] = [
     Rainbow,
     Plasma,
     Fire,
@@ -71,6 +80,10 @@ const EFFECTS: [Effect; 14] = [
     Lasers,
     Gravity,
     PressureMap,
+    Spectrum,
+    VuMeter,
+    BeatRings,
+    SoundFire,
 ];
 
 impl Effect {
@@ -90,6 +103,10 @@ impl Effect {
             Lasers => "lasers",
             Gravity => "gravity",
             PressureMap => "pressure map",
+            Spectrum => "spectrum",
+            VuMeter => "vu meter",
+            BeatRings => "beat rings",
+            SoundFire => "sound fire",
         }
     }
 
@@ -137,6 +154,11 @@ struct App {
     ripples: Vec<Ripple>,
     falling: Vec<Fall>,
     stack: [i32; 8],
+    hue: f32, // walks on every beat
+    /// Opened the first time an effect listens, and then left open: nothing else
+    /// needs a recording stream, and reopening it on every switch back is worse.
+    audio: Option<Audio>,
+    listening: bool,
 }
 
 impl App {
@@ -150,7 +172,27 @@ impl App {
             ripples: Vec::new(),
             falling: Vec::new(),
             stack: [0; 8],
+            hue: 0.0,
+            audio: None,
+            listening: false,
         }
+    }
+
+    /// The last window of sound, silence if there is nothing to listen to. The
+    /// failure is worth a line on stderr and nothing more: the effect still runs,
+    /// it just sits dark, which is what silence looks like anyway.
+    fn sound(&mut self) -> Sound {
+        if !self.listening {
+            self.listening = true;
+            match Audio::open(std::env::var("FLASH_DANCE_SOURCE").ok().as_deref()) {
+                Ok(audio) => {
+                    println!("listening to {}", audio.source());
+                    self.audio = Some(audio);
+                }
+                Err(e) => eprintln!("no sound: {e}"),
+            }
+        }
+        self.audio.as_mut().map_or(Sound::default(), Audio::listen)
     }
 
     /// Wipes the previous effect's state and blanks the device.
@@ -162,6 +204,7 @@ impl App {
         self.ripples.clear();
         self.falling.clear();
         self.stack = [0; 8];
+        self.hue = 0.0;
         pad.clear()
     }
 
@@ -177,7 +220,7 @@ impl App {
         match effect {
             Rainbow => self.rainbow(t),
             Plasma => self.plasma(t),
-            Fire => self.fire(dt),
+            Fire => self.fire(dt, 1.0),
             Rain => self.rain(dt),
             Rings => self.rings(t),
             Radar => self.radar(t, dt),
@@ -189,6 +232,23 @@ impl App {
             Lasers => self.lasers(dt, events),
             Gravity => self.gravity(dt, events),
             PressureMap => self.pressure_map(events),
+            Spectrum => {
+                let heard = self.sound();
+                self.spectrum(heard)
+            }
+            VuMeter => {
+                let heard = self.sound();
+                self.vu_meter(heard)
+            }
+            BeatRings => {
+                let heard = self.sound();
+                self.beat_rings(t, heard)
+            }
+            SoundFire => {
+                let heard = self.sound();
+                // Quiet is embers, a kick drum is a flare-up.
+                self.fire(dt, 0.2 + heard.bass() * 1.3)
+            }
         }
         pad.set_all(self.grid.lights())
     }
@@ -208,14 +268,16 @@ impl App {
         }
     }
 
-    fn fire(&mut self, dt: f32) {
+    /// `fuel` scales the heat fed in at the bottom row: 1.0 is a steady fire, 0 is
+    /// out. It is what `sound fire` modulates.
+    fn fire(&mut self, dt: f32, fuel: f32) {
         // Propagate on its own clock rather than once per frame, so the flames rise
         // at the same rate whatever the frame rate — and respond to speed.
         self.embers = (self.embers + dt * 20.0).min(4.0); // never spiral catching up
         while self.embers >= 1.0 {
             self.embers -= 1.0;
             for x in 0..8 {
-                self.scratch[(7 * 8 + x) as usize] = 0.6 + self.rng.f32() * 0.4;
+                self.scratch[(7 * 8 + x) as usize] = (0.6 + self.rng.f32() * 0.4) * fuel;
             }
             for y in 0..7 {
                 for x in 0..8 {
@@ -307,6 +369,12 @@ impl App {
             });
         }
         self.grid.clear();
+        self.draw_ripples(t);
+    }
+
+    /// Expanding rings, one per entry in `ripples`, fading as they grow. The caller
+    /// paints the background first — this only adds light.
+    fn draw_ripples(&mut self, t: f32) {
         for ripple in &self.ripples {
             let age = t - ripple.start;
             let radius = age * 7.0;
@@ -399,6 +467,46 @@ impl App {
             // Cold blue through to hot red, dark where you have never played.
             self.grid.set(x, y, hsv(0.66 * (1.0 - v), 1.0, v));
         }
+    }
+
+    /// A bar per octave band, bass on the left, rising from the bottom row.
+    fn spectrum(&mut self, sound: Sound) {
+        for (x, y) in cells() {
+            let height = sound.bands[x as usize] * 8.0;
+            // The topmost cell of a bar dims rather than snapping on, which is the
+            // whole reason the grid holds linear colour.
+            let fill = (height - (7 - y) as f32).clamp(0.0, 1.0);
+            self.grid.set(x, y, hsv(x as f32 / 12.0, 1.0, fill));
+        }
+    }
+
+    /// The whole grid as one 64-LED meter, filling row by row from the bottom left.
+    fn vu_meter(&mut self, sound: Sound) {
+        let lit = sound.level * 64.0;
+        for (x, y) in cells() {
+            let led = ((7 - y) * 8 + x) as f32;
+            // Green at the quiet end of the scale, red at the top of it.
+            self.grid.set(
+                x,
+                y,
+                hsv(0.33 * (1.0 - led / 63.0), 1.0, (lit - led).clamp(0.0, 1.0)),
+            );
+        }
+    }
+
+    /// A ring out of the centre on every beat, over a glow that follows the volume.
+    fn beat_rings(&mut self, t: f32, sound: Sound) {
+        if sound.beat {
+            self.hue = (self.hue + 0.13).rem_euclid(1.0);
+            self.ripples.push(Ripple {
+                x: 3.5,
+                y: 3.5,
+                start: t,
+                hue: self.hue,
+            });
+        }
+        self.grid.fill(hsv(self.hue, 1.0, sound.level * 0.12));
+        self.draw_ripples(t);
     }
 }
 

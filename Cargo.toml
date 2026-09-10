@@ -1,7 +1,8 @@
 [workspace]
-members = ["api", "apps/*"]
+members = ["api", "audio", "apps/*"]
 resolver = "3"
 
 [workspace.dependencies]
 flash-dance = { path = "api" }
+flash-dance-audio = { path = "audio" }
 midir = "0.11.0"
