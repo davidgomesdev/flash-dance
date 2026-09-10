@@ -1,8 +1,25 @@
 [workspace]
-members = ["api", "audio", "apps/*"]
+members = ["api", "audio", "web", "apps/*"]
 resolver = "3"
 
 [workspace.dependencies]
 flash-dance = { path = "api" }
 flash-dance-audio = { path = "audio" }
 midir = "0.11.0"
+
+# cargo-leptos builds the web crate twice: the server natively, the same lib to
+# wasm for the browser. Paths are relative to this file.
+[[workspace.metadata.leptos]]
+name = "flash-dance-web"
+bin-package = "flash-dance-web"
+lib-package = "flash-dance-web"
+output-name = "flash-dance-web"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "web/style/main.css"
+site-addr = "127.0.0.1:3000"
+reload-port = 3001
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false

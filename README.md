@@ -4,7 +4,8 @@ A small Rust API for the Novation Launchpad Mini MK3 over USB MIDI: set the butt
 LEDs, receive the button presses. The lights flash, the pads get danced on.
 
 A cargo workspace: `api/` is the Launchpad library, `audio/` listens to whatever
-the machine is playing or hearing, `apps/*` are the things built on them.
+the machine is playing or hearing, `apps/*` are the things built on them, and
+`web/` is a website that runs them ([below](#the-website)).
 Most apps quit with the top-left button; `effects` and `snake` use the arrows for
 their own controls, so those two quit with **Stop/Solo/Mute** (bottom of the right
 column) instead.
@@ -43,7 +44,36 @@ trails and spawn rates alike. Speed does nothing to the ones with no time in the
 — `pressure map`, `spectrum` and `vu meter`, which are only ever a picture of
 their input.
 
-`cargo run -p effects -- fire` starts on a named effect instead of the first.
+`cargo run -p effects -- fire` starts on a named effect instead of the first, and
+`cargo run -p effects -- --list` prints them without touching the device.
+
+## The website
+
+```bash
+cargo install cargo-leptos          # once
+rustup target add wasm32-unknown-unknown
+cargo leptos serve                  # http://127.0.0.1:3000
+```
+
+A page of cards, one per effect, in the same colour that effect's pad has in the
+device's own picker. Click one and it runs; click another and it switches; the bar
+at the top says what is going and stops it.
+
+It is a front end for the binary rather than a second implementation: the list,
+the grouping and the colours all come from `effects --list`, so the site cannot
+drift out of step with what the device can do, and every effect is the same
+process you would have started from a terminal. Only one runs at a time, because
+the Launchpad has one MIDI port.
+
+The one setting on the page is which audio source the sound effects listen to.
+Speed and brightness are deliberately missing: they belong on the device's arrow
+buttons, where your hands already are.
+
+Stopping — the button, switching effects, or quitting the server — closes the
+binary's stdin, which makes it break its loop and exit through its own `Drop`.
+That matters: a signal would end it without clearing the LEDs or leaving
+programmer mode. It also means an effect cannot outlive the server that started
+it.
 
 ## Listening
 

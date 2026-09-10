@@ -14,6 +14,7 @@ api/           the `flash-dance` crate: the MIDI driver, plus the drawing
                primitives every app shares (Grid, hsv, Clock, Rng)
 audio/         the `flash-dance-audio` crate: sound in, a level, eight bands
                and a beat out. Nothing here knows about Launchpads
+web/           a Leptos site that runs the `effects` binary for you
 apps/effects/  18 LED effects, a picker and a speed control; `-- <name>` starts on one
 apps/paint/    tap grid pads to toggle them
 apps/palette/  browse the device's 128 palette colours and print indices
@@ -239,11 +240,42 @@ freeze above was spotted. Expect a second or two of silence at the start: a
 suspended sink takes that long to resume. Combine it with the MIDI injection below
 and the whole sound path is testable with no hands and no speakers.
 
+## The website
+
+`web/` is a Leptos SSR app (axum, built by cargo-leptos) whose entire job is to
+run the `effects` binary. **It renders nothing itself and must not start to.** The
+effect list, the grouping and each card's colour all come from `effects --list`;
+duplicating them here is how the site would start lying about what the device can
+do. If the site needs to know something new, teach the binary to say it.
+
+The parts that are not obvious:
+
+- **Stopping closes the child's stdin. Do not replace this with a signal.** A Rust
+  process takes the default SIGTERM, which ends it *without running `Drop`* — and
+  `Drop` is what clears the LEDs, restores brightness and leaves programmer mode.
+  Closing the pipe lets the binary break its loop and exit the ordinary way, and it
+  is why an effect cannot outlive the server: losing the write end says the same
+  thing. `effects` only watches stdin when it is **not** a terminal, so that a
+  backgrounded `effects &` is not stopped by SIGTTIN for reading its own tty.
+- **One child, ever.** The Launchpad has one MIDI port, and the binary holds it
+  open — a second effect cannot have it. Starting one stops the last.
+- **The page polls.** An effect can end without the server asking: the device's own
+  Stop/Solo/Mute, or a crash because nothing is plugged in. `status` reaps the
+  child and reports its last words, so a failure lands on the page instead of
+  leaving a card looking live.
+- The web crate defaults to the `ssr` feature so an ordinary `cargo build
+  --workspace` builds the server and nothing has to know about cargo-leptos, which
+  passes the features itself for each of its two builds.
+
+This is the one crate exempt from the "one dependency" rule below; a web framework
+was the ask. Nothing it pulls in may leak into `api/`, `audio/` or `apps/`.
+
 ## Working on this
 
 ```bash
-cargo test --workspace   # 15 unit tests: pads, colour, grid, rng, clock, SysEx,
-                         # parsing, FFT, bands, gain
+cargo test --workspace   # 16 unit tests: pads, colour, grid, rng, clock, SysEx,
+                         # parsing, FFT, bands, gain, error reporting
+cargo leptos serve       # the website, on :3000
 cargo clippy --workspace --all-targets
 cargo fmt
 cargo run -p effects     # any app; needs the device plugged in

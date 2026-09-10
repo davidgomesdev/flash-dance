@@ -114,6 +114,17 @@ impl Effect {
     fn hue(self) -> f32 {
         EFFECTS.iter().position(|e| *e == self).unwrap_or(0) as f32 / EFFECTS.len() as f32
     }
+
+    /// Which of the three kinds this is: a function of time, of your hands, or of
+    /// what the machine is playing. Matched exhaustively so that adding an effect
+    /// without placing it is a compile error rather than a silent "ambient".
+    fn group(self) -> &'static str {
+        match self {
+            Rainbow | Plasma | Fire | Rain | Rings | Radar | Starfield | Wipe => "ambient",
+            PressRipple | Comet | VelocityHeat | Lasers | Gravity | PressureMap => "reactive",
+            Spectrum | VuMeter | BeatRings | SoundFire => "sound",
+        }
+    }
 }
 
 /// Per-second decay as a per-frame factor. Trails then look the same whatever the
@@ -600,12 +611,59 @@ fn starting_effect() -> usize {
     }
 }
 
+/// `--list` prints `group<TAB>name`, one effect per line, and exits without
+/// touching the device — the binary describing itself, so a front end can offer
+/// the effects without keeping its own copy of the list to drift out of date.
+fn list() -> bool {
+    if std::env::args().nth(1).as_deref() != Some("--list") {
+        return false;
+    }
+    for effect in EFFECTS {
+        println!("{}\t{}", effect.group(), effect.name());
+    }
+    true
+}
+
+/// Quits when whoever launched us closes our stdin, so that something driving this
+/// binary — the web front end does — can stop it the same way the device's own
+/// Stop/Solo/Mute does: by breaking the loop, so `Drop` still clears the LEDs and
+/// leaves programmer mode. A signal would skip all of that.
+///
+/// Only when stdin is not a terminal. Reading a terminal here would swallow what
+/// was typed at it, and a backgrounded `effects &` would be stopped by SIGTTIN for
+/// daring to read it.
+fn quit_on_closed_stdin() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use std::io::{IsTerminal, Read};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    let closed = Arc::new(AtomicBool::new(false));
+    if std::io::stdin().is_terminal() {
+        return closed;
+    }
+    let flag = Arc::clone(&closed);
+    std::thread::spawn(move || {
+        // Any input means the same as end of input: nothing here reads commands.
+        let _ = std::io::stdin().read(&mut [0; 1]);
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    closed
+}
+
 fn main() -> Result<()> {
+    if list() {
+        return Ok(());
+    }
+    let closed = quit_on_closed_stdin();
+    // Before the device is opened, because a name that matches nothing exits the
+    // process outright — and an exit skips `Drop`, which would leave the Launchpad
+    // lit, at full brightness and still in programmer mode.
+    let starting = starting_effect();
     let (mut pad, events) = Launchpad::connect()?;
     let mut app = App::new();
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
-    let (mut current, mut picking) = (starting_effect(), false);
+    let (mut current, mut picking) = (starting, false);
     let (mut wall, mut virtual_time) = (0.0f32, 0.0f32);
     // Global: both outlive a change of effect.
     let mut level = NORMAL_SPEED;
@@ -619,6 +677,9 @@ fn main() -> Result<()> {
 
     'running: loop {
         let now = clock.tick(&events, &mut queue);
+        if closed.load(std::sync::atomic::Ordering::Relaxed) {
+            break 'running;
+        }
         // Effects see a virtual clock, so speed scales motion, decay and spawn
         // rates alike rather than only whatever was written against wall time.
         let dt = (now - wall).max(0.0) * SPEEDS[level];
