@@ -1,21 +1,29 @@
-//! Seventeen LED effects with a picker.
+//! Fourteen LED effects with a picker and a speed control.
 //!
-//! Top-right button opens the picker (tap a lit pad to choose), top-left quits.
-//! The first three effects animate on the device's own clock and cost one message;
-//! the rest render frames here at [`FPS`].
+//! - **Session** (top row, 5th) opens the picker; tap a lit pad to choose.
+//! - **Arrows** change speed: up and right faster, down and left slower. The right
+//!   column shows the current speed, blue below 1x and red above.
+//! - **Stop/Solo/Mute** (bottom of the right column) quits.
+//!
+//! Effects run on a virtual clock, so changing speed scales everything they do —
+//! motion, decay trails, spawn rates — rather than only the ones written against a
+//! wall clock. `pressure map` is the one effect with no time in it at all.
 
 use flash_dance::{Clock, Event, Grid, Launchpad, Light, Pad, Result, Rng, hsv};
 
-const QUIT: Pad = Pad(91); // top row, leftmost
-const MENU: Pad = Pad(98); // top row, rightmost
+const MENU: Pad = Pad(95); // top row, "Session"
 const FPS: f64 = 30.0;
+
+fn quit_button() -> Pad {
+    Pad::right(7) // bottom of the right column, "Stop/Solo/Mute"
+}
+
+/// Discrete speeds, one per LED of the speed bar. Index 3 is normal.
+const SPEEDS: [f32; 7] = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+const NORMAL_SPEED: usize = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Effect {
-    // Device-side: the Launchpad animates these itself.
-    PulseWash,
-    Checkerboard,
-    BreathingBorder,
     // Ambient: a function of time, no input.
     Rainbow,
     Plasma,
@@ -36,10 +44,7 @@ enum Effect {
 
 use Effect::*;
 
-const EFFECTS: [Effect; 17] = [
-    PulseWash,
-    Checkerboard,
-    BreathingBorder,
+const EFFECTS: [Effect; 14] = [
     Rainbow,
     Plasma,
     Fire,
@@ -59,9 +64,6 @@ const EFFECTS: [Effect; 17] = [
 impl Effect {
     fn name(self) -> &'static str {
         match self {
-            PulseWash => "pulse wash (device)",
-            Checkerboard => "checkerboard flash (device)",
-            BreathingBorder => "breathing border (device)",
             Rainbow => "rainbow diagonal",
             Plasma => "plasma",
             Fire => "fire",
@@ -83,6 +85,12 @@ impl Effect {
     fn hue(self) -> f32 {
         EFFECTS.iter().position(|e| *e == self).unwrap_or(0) as f32 / EFFECTS.len() as f32
     }
+}
+
+/// Per-second decay as a per-frame factor. Trails then look the same whatever the
+/// frame rate, and speed reaches them like it reaches everything else.
+fn decay(per_second: f32, dt: f32) -> f32 {
+    per_second.powf(dt)
 }
 
 struct Drop {
@@ -112,6 +120,7 @@ struct App {
     grid: Grid,
     rng: Rng,
     scratch: [f32; 64],
+    embers: f32, // fire's propagation-step accumulator
     drops: Vec<Drop>,
     ripples: Vec<Ripple>,
     falling: Vec<Fall>,
@@ -124,6 +133,7 @@ impl App {
             grid: Grid::new(),
             rng: Rng::new(),
             scratch: [0.0; 64],
+            embers: 0.0,
             drops: Vec::new(),
             ripples: Vec::new(),
             falling: Vec::new(),
@@ -131,32 +141,19 @@ impl App {
         }
     }
 
-    /// Selects an effect: wipes the previous one's state and, for a device-side
-    /// effect, sends the one message that is all it needs.
-    fn enter(&mut self, pad: &mut Launchpad, effect: Effect) -> Result<()> {
+    /// Wipes the previous effect's state and blanks the device.
+    fn reset(&mut self, pad: &mut Launchpad) -> Result<()> {
         self.grid.clear();
         self.scratch = [0.0; 64];
+        self.embers = 0.0;
         self.drops.clear();
         self.ripples.clear();
         self.falling.clear();
         self.stack = [0; 8];
-        pad.clear()?;
-
-        match effect {
-            PulseWash => pad.set_all(all_pads().map(|p| (p, Light::Pulse(21)))),
-            Checkerboard => pad.set_all(grid_pads().map(|(p, x, y)| {
-                let (a, b) = if (x + y) % 2 == 0 { (5, 45) } else { (45, 5) };
-                (p, Light::Flash { on: a, off: b })
-            })),
-            BreathingBorder => pad.set_all(
-                (0..8)
-                    .flat_map(|i| [Pad::top(i), Pad::right(i)])
-                    .map(|p| (p, Light::Pulse(3))),
-            ),
-            _ => Ok(()),
-        }
+        pad.clear()
     }
 
+    /// `t` and `dt` are virtual: already scaled by the speed setting.
     fn render(
         &mut self,
         pad: &mut Launchpad,
@@ -166,19 +163,18 @@ impl App {
         events: &[Event],
     ) -> Result<()> {
         match effect {
-            PulseWash | Checkerboard | BreathingBorder => return Ok(()), // the device is doing it
             Rainbow => self.rainbow(t),
             Plasma => self.plasma(t),
-            Fire => self.fire(),
+            Fire => self.fire(dt),
             Rain => self.rain(dt),
             Rings => self.rings(t),
-            Radar => self.radar(t),
-            Starfield => self.starfield(),
+            Radar => self.radar(t, dt),
+            Starfield => self.starfield(dt),
             Wipe => self.wipe(t),
             PressRipple => self.press_ripple(t, events),
-            Comet => self.comet(events),
-            VelocityHeat => self.velocity_heat(events),
-            Lasers => self.lasers(events),
+            Comet => self.comet(dt, events),
+            VelocityHeat => self.velocity_heat(dt, events),
+            Lasers => self.lasers(dt, events),
             Gravity => self.gravity(dt, events),
             PressureMap => self.pressure_map(events),
         }
@@ -200,19 +196,22 @@ impl App {
         }
     }
 
-    fn fire(&mut self) {
-        // Seed the bottom row, then let each row above take from the one below and
-        // cool. Ascending order reads the previous frame's row, so flames rise one
-        // row per frame; cooling decides how far up they get before dying.
-        for x in 0..8 {
-            self.scratch[(7 * 8 + x) as usize] = 0.6 + self.rng.f32() * 0.4;
-        }
-        for y in 0..7 {
+    fn fire(&mut self, dt: f32) {
+        // Propagate on its own clock rather than once per frame, so the flames rise
+        // at the same rate whatever the frame rate — and respond to speed.
+        self.embers = (self.embers + dt * 20.0).min(4.0); // never spiral catching up
+        while self.embers >= 1.0 {
+            self.embers -= 1.0;
             for x in 0..8 {
-                let drift = self.rng.below(3) as i32 - 1;
-                let below = ((x + drift).clamp(0, 7) + (y + 1) * 8) as usize;
-                let cooled = self.scratch[below] - self.rng.f32() * 0.28;
-                self.scratch[(y * 8 + x) as usize] = cooled.max(0.0);
+                self.scratch[(7 * 8 + x) as usize] = 0.6 + self.rng.f32() * 0.4;
+            }
+            for y in 0..7 {
+                for x in 0..8 {
+                    let drift = self.rng.below(3) as i32 - 1;
+                    let below = ((x + drift).clamp(0, 7) + (y + 1) * 8) as usize;
+                    let cooled = self.scratch[below] - self.rng.f32() * 0.28;
+                    self.scratch[(y * 8 + x) as usize] = cooled.max(0.0);
+                }
             }
         }
         for (x, y) in cells() {
@@ -224,8 +223,8 @@ impl App {
     }
 
     fn rain(&mut self, dt: f32) {
-        self.grid.fade(0.62);
-        if self.rng.chance(0.35) {
+        self.grid.fade(decay(1e-6, dt));
+        if self.rng.chance((10.0 * dt).min(1.0)) {
             self.drops.push(Drop {
                 x: self.rng.below(8) as i32,
                 y: -1.0,
@@ -249,8 +248,8 @@ impl App {
         }
     }
 
-    fn radar(&mut self, t: f32) {
-        self.grid.fade(0.82);
+    fn radar(&mut self, t: f32, dt: f32) {
+        self.grid.fade(decay(0.003, dt));
         let angle = t * 2.0;
         let hue = (t * 0.1).rem_euclid(1.0);
         // Walk out along the beam rather than testing every cell's angle: near the
@@ -264,9 +263,9 @@ impl App {
         }
     }
 
-    fn starfield(&mut self) {
-        self.grid.fade(0.9);
-        if self.rng.chance(0.4) {
+    fn starfield(&mut self, dt: f32) {
+        self.grid.fade(decay(0.04, dt));
+        if self.rng.chance((12.0 * dt).min(1.0)) {
             let (x, y) = (self.rng.below(8) as i32, self.rng.below(8) as i32);
             self.grid.set(x, y, hsv(self.rng.f32(), 0.4, 1.0));
         }
@@ -309,15 +308,15 @@ impl App {
         self.ripples.retain(|r| t - r.start < 1.5);
     }
 
-    fn comet(&mut self, events: &[Event]) {
-        self.grid.fade(0.88);
+    fn comet(&mut self, dt: f32, events: &[Event]) {
+        self.grid.fade(decay(0.02, dt));
         for (x, y, _) in presses(events) {
             self.grid.set(x, y, hsv(x as f32 / 8.0, 1.0, 1.0));
         }
     }
 
-    fn velocity_heat(&mut self, events: &[Event]) {
-        self.grid.fade(0.97);
+    fn velocity_heat(&mut self, dt: f32, events: &[Event]) {
+        self.grid.fade(decay(0.4, dt));
         for (x, y, velocity) in presses(events) {
             // Soft is blue, hard is red — the byte `paint` throws away.
             let hue = 0.66 * (1.0 - velocity as f32 / 127.0);
@@ -325,8 +324,8 @@ impl App {
         }
     }
 
-    fn lasers(&mut self, events: &[Event]) {
-        self.grid.fade(0.8);
+    fn lasers(&mut self, dt: f32, events: &[Event]) {
+        self.grid.fade(decay(0.0012, dt));
         for (x, y, _) in presses(events) {
             let hue = (x + y) as f32 / 14.0;
             for i in 0..8 {
@@ -396,16 +395,6 @@ fn cells() -> impl Iterator<Item = (i32, i32)> {
     (0..8).flat_map(|y| (0..8).map(move |x| (x, y)))
 }
 
-fn grid_pads() -> impl Iterator<Item = (Pad, i32, i32)> {
-    cells().map(|(x, y)| (Pad::xy(x as u8, y as u8), x, y))
-}
-
-fn all_pads() -> impl Iterator<Item = Pad> {
-    grid_pads()
-        .map(|(p, _, _)| p)
-        .chain((0..8).flat_map(|i| [Pad::top(i), Pad::right(i)]))
-}
-
 /// Grid presses only, as `(x, y, velocity)` — the edge buttons are the app's own.
 fn presses(events: &[Event]) -> impl Iterator<Item = (i32, i32, u8)> + '_ {
     events.iter().filter_map(|event| match event {
@@ -415,6 +404,34 @@ fn presses(events: &[Event]) -> impl Iterator<Item = (i32, i32, u8)> + '_ {
         }
         _ => None,
     })
+}
+
+/// The Mini MK3's top row starts with up, down, left, right. Up and right speed
+/// things up, down and left slow them down, so either mental model works.
+fn speed_nudge(button: Pad) -> Option<i32> {
+    match button {
+        b if b == Pad::top(0) || b == Pad::top(3) => Some(1),
+        b if b == Pad::top(1) || b == Pad::top(2) => Some(-1),
+        _ => None,
+    }
+}
+
+/// Speed as a bar up the right column, leaving the bottom button as quit.
+fn draw_speed(pad: &mut Launchpad, level: usize) -> Result<()> {
+    let colour = match level {
+        l if l < NORMAL_SPEED => 45, // blue, slower than normal
+        l if l > NORMAL_SPEED => 5,  // red, faster
+        _ => 21,                     // green at 1x
+    };
+    let bar = (0..7).map(|i| {
+        let light = if i <= level {
+            Light::Solid(colour)
+        } else {
+            Light::Off
+        };
+        (Pad::right(6 - i as u8), light)
+    });
+    pad.set_all(bar.chain([(quit_button(), Light::Solid(7))]))
 }
 
 /// One pad per effect in its signature colour, the current one pulsing white.
@@ -454,45 +471,65 @@ fn main() -> Result<()> {
     let mut app = App::new();
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
-    let (mut current, mut picking, mut last) = (starting_effect(), false, 0.0f32);
+    let (mut current, mut picking) = (starting_effect(), false);
+    let (mut wall, mut virtual_time) = (0.0f32, 0.0f32);
+    let mut level = NORMAL_SPEED;
 
-    app.enter(&mut pad, EFFECTS[current])?;
+    app.reset(&mut pad)?;
+    draw_speed(&mut pad, level)?;
     println!("{}", EFFECTS[current].name());
-    println!("(top-right button picks an effect, top-left quits)");
+    println!("(Session picks an effect, arrows change speed, Stop/Solo/Mute quits)");
 
     'running: loop {
-        let t = clock.tick(&events, &mut queue);
-        let dt = (t - last).max(0.0);
-        last = t;
+        let now = clock.tick(&events, &mut queue);
+        // Effects see a virtual clock, so speed scales motion, decay and spawn
+        // rates alike rather than only whatever was written against wall time.
+        let dt = (now - wall).max(0.0) * SPEEDS[level];
+        wall = now;
+        virtual_time += dt;
 
         for event in &queue {
-            match *event {
-                Event::Press(QUIT, _) => break 'running,
-                Event::Press(MENU, _) => {
-                    picking = !picking;
-                    if picking {
-                        draw_picker(&mut pad, current)?;
-                    } else {
-                        app.enter(&mut pad, EFFECTS[current])?;
-                    }
+            let Event::Press(button, _) = *event else {
+                continue;
+            };
+            if button == quit_button() {
+                break 'running;
+            }
+            if let Some(step) = speed_nudge(button) {
+                let moved = (level as i32 + step).clamp(0, SPEEDS.len() as i32 - 1) as usize;
+                if moved != level {
+                    level = moved;
+                    println!("speed {}x", SPEEDS[level]);
                 }
-                Event::Press(chosen, _) if picking => {
-                    if let Some((x, y)) = chosen.to_xy() {
-                        let i = (y * 8 + x) as usize;
-                        if i < EFFECTS.len() {
-                            current = i;
-                            picking = false;
-                            app.enter(&mut pad, EFFECTS[current])?;
-                            println!("{}", EFFECTS[current].name());
-                        }
-                    }
+                if !picking {
+                    draw_speed(&mut pad, level)?;
                 }
-                _ => {}
+                continue;
+            }
+            if button == MENU {
+                picking = !picking;
+                if picking {
+                    draw_picker(&mut pad, current)?;
+                } else {
+                    app.reset(&mut pad)?;
+                    draw_speed(&mut pad, level)?;
+                }
+                continue;
+            }
+            if picking && let Some((x, y)) = button.to_xy() {
+                let i = (y * 8 + x) as usize;
+                if i < EFFECTS.len() {
+                    current = i;
+                    picking = false;
+                    app.reset(&mut pad)?;
+                    draw_speed(&mut pad, level)?;
+                    println!("{}", EFFECTS[current].name());
+                }
             }
         }
 
         if !picking {
-            app.render(&mut pad, EFFECTS[current], t, dt, &queue)?;
+            app.render(&mut pad, EFFECTS[current], virtual_time, dt, &queue)?;
         }
     }
 

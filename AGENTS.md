@@ -12,7 +12,7 @@ and receive button presses. One external dependency, `midir`.
 ```
 api/           the `flash-dance` crate: the MIDI driver, plus the drawing
                primitives every app shares (Grid, hsv, Clock, Rng)
-apps/effects/  17 LED effects with a picker; `-- <name>` starts on one
+apps/effects/  14 LED effects, a picker and a speed control; `-- <name>` starts on one
 apps/paint/    tap grid pads to toggle them
 apps/palette/  browse the device's 128 palette colours and print indices
 apps/whack/    whack-a-mole
@@ -34,9 +34,15 @@ two of them want the same helper, it belongs in the API.
 
 Inside the API there is deliberately no module tree, no error enum, no trait
 abstraction, and **no `Effect` trait** — effects are plain methods on one flat
-struct in `apps/effects`, and adding a seventeen-implementation trait to hold them
-would buy nothing. The device has one model and one protocol; if you are asked to
-support a Launchpad Pro or MK2, that is the point to generalise — not before.
+struct in `apps/effects`, and a trait with fourteen implementations would buy
+nothing. The device has one model and one protocol; if you are asked to support a
+Launchpad Pro or MK2, that is the point to generalise — not before.
+
+Effects are driven by a **virtual clock**: `main` scales wall-clock `dt` by the
+speed setting and hands effects the result, so one speed control reaches motion,
+decay and spawn rates alike. That only works because nothing renders per frame —
+a trail is `decay(per_second, dt)`, not a fixed factor, and fire propagates off an
+accumulator. Write new effects the same way, or speed will silently skip them.
 
 ### Drawing primitives
 
@@ -197,8 +203,9 @@ amidi -l                                            # find the ",1" port
 amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 0E 00 F7'   # back to standalone mode
 ```
 
-Every app has a quit button — top-left, except `snake`, where the arrows own that
-corner and the bottom scene button quits instead. Prefer it over Ctrl+C.
+Every app has a quit button — top-left, except `effects` and `snake`, which use the
+arrows for their own controls and so quit with Stop/Solo/Mute (`Pad::right(7)`).
+Prefer it over Ctrl+C.
 
 ## Repo conventions
 

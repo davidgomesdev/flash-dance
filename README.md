@@ -4,30 +4,37 @@ A small Rust API for the Novation Launchpad Mini MK3 over USB MIDI: set the butt
 LEDs, receive the button presses. The lights flash, the pads get danced on.
 
 A cargo workspace: `api/` is the library, `apps/*` are the things built on it.
-Every app quits with the top-left button (except `snake` — see below).
+Most apps quit with the top-left button; `effects` and `snake` use the arrows for
+their own controls, so those two quit with **Stop/Solo/Mute** (bottom of the right
+column) instead.
 
 | | |
 |---|---|
-| `cargo run -p effects` | 17 LED effects; top-right button opens the picker |
+| `cargo run -p effects` | 14 LED effects with a picker and a speed control |
 | `cargo run -p paint` | tap pads to toggle them |
 | `cargo run -p palette` | browse the device's 128 palette colours, print indices |
 | `cargo run -p whack` | whack-a-mole |
 | `cargo run -p simon` | Simon, played on four 4x4 quadrants |
-| `cargo run -p snake` | snake, steered with the arrow buttons — **quits with the bottom scene button**, since the arrows occupy the top-left corner |
+| `cargo run -p snake` | snake on a torus, steered with the arrow buttons |
 | `cargo run -p life` | Conway's life: tap to draw, right column runs, reseeds, clears |
 
 ### The effects
-
-`cargo run -p effects -- fire` starts on a named effect instead of the first.
-
-**On the device's own clock** (one message, no host work): pulse wash, checkerboard
-flash, breathing border.
 
 **Ambient:** rainbow diagonal, plasma, fire, rain, ripple rings, radar sweep,
 starfield, colour wipe.
 
 **Reactive:** ripple on press, comet trail, velocity heat (colour by how hard you
 hit), lasers, gravity, pressure map.
+
+Controls: **Session** opens the picker, the **arrows** change speed (up and right
+faster, down and left slower), and **Stop/Solo/Mute** quits. The right column shows
+the current speed — blue below 1x, green at 1x, red above.
+
+Effects run on a virtual clock, so speed scales everything they do: motion, decay
+trails and spawn rates alike. `pressure map` is the one effect with no time in it,
+so speed does nothing there.
+
+`cargo run -p effects -- fire` starts on a named effect instead of the first.
 
 ## Usage
 
