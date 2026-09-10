@@ -139,12 +139,22 @@ amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 08 F7' -d -t 1
 #   -> F0002029020D08 <level> F7
 ```
 
-`connect` now sets it to 127, and `apps/effects` puts it on the up/down arrows.
-Note this **persists on the device** across unplugging — it is the Setup menu's LED
-level — and nothing restores the old value, because reading it back would mean
-parsing SysEx replies that `Event` deliberately drops. So an app that dims the
-device leaves it dim for everything else, including Ableton. `set_brightness` is
-the knob.
+`connect` reads the level, raises it to 127, and drop puts the old level back;
+`apps/effects` also puts it on the up/down arrows. Restoring matters because the
+level **persists on the device** across unplugging — it is the Setup menu's LED
+level — so without it an app that dims the device would leave it dim for
+everything else, Ableton included.
+
+**The manual documents no default brightness**, only the 0–127 range and the
+Setup menu's eight levels, so there is no constant to restore to and the value the
+device was on is the only honest answer. If the readback does not arrive within
+250 ms, `brightness_was` stays `None` and drop leaves brightness alone rather than
+inventing a value.
+
+This is also the one place the input callback looks at something other than button
+events: `parse_brightness` intercepts the reply before `Event::parse` sees it. The
+device sends confirmations for other commands too (`0Eh` mode changes show up on
+the wire), so match on the command byte, never on "is a SysEx".
 
 Brightness and `GAMMA` are different knobs and worth not confusing: brightness
 scales everything, gamma changes only how the midtones sit between off and full.

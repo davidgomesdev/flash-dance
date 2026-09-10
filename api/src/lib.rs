@@ -110,6 +110,10 @@ pub struct Launchpad {
     out: MidiOutputConnection,
     // Held so the input callback keeps running; dropping it closes the port.
     _input: MidiInputConnection<()>,
+    /// What the brightness was before we touched it, put back on drop. `None` if
+    /// the device did not answer the readback in time, in which case drop leaves
+    /// brightness alone rather than guessing at a value.
+    brightness_was: Option<u8>,
 }
 
 impl Launchpad {
@@ -123,12 +127,15 @@ impl Launchpad {
         let out_port = find_port(&output.ports(), |p| output.port_name(p).ok())?;
 
         let (tx, rx) = channel();
+        let (brightness_tx, brightness_rx) = channel();
         let _input = input.connect(
             &in_port,
             "launchpad",
             move |_time, msg, _| {
-                if let Some(event) = Event::parse(msg) {
-                    // The receiver going away just means nobody is listening any more.
+                // The receivers going away just means nobody is listening any more.
+                if let Some(level) = parse_brightness(msg) {
+                    let _ = brightness_tx.send(level);
+                } else if let Some(event) = Event::parse(msg) {
                     let _ = tx.send(event);
                 }
             },
@@ -138,8 +145,17 @@ impl Launchpad {
         let mut pad = Launchpad {
             out: output.connect(&out_port, "launchpad")?,
             _input,
+            brightness_was: None,
         };
         pad.set_programmer_mode(true)?;
+
+        // Ask what the brightness is before changing it, so drop can put it back.
+        // The manual documents no default value to fall back on.
+        pad.out.send(&command(&[0x08]))?;
+        pad.brightness_was = brightness_rx
+            .recv_timeout(std::time::Duration::from_millis(250))
+            .ok();
+
         pad.set_brightness(127)?;
         pad.clear()?;
         Ok((pad, rx))
@@ -195,9 +211,21 @@ fn command(payload: &[u8]) -> Vec<u8> {
 
 impl Drop for Launchpad {
     fn drop(&mut self) {
-        // Leave the device as we found it: dark, and back in its standalone mode.
+        // Leave the device as we found it: dark, at the brightness it came with,
+        // and back in its standalone mode.
         let _ = self.clear();
+        if let Some(level) = self.brightness_was {
+            let _ = self.set_brightness(level);
+        }
         let _ = self.set_programmer_mode(false);
+    }
+}
+
+/// The device's reply to a brightness readback: the header, `08h`, the level.
+fn parse_brightness(msg: &[u8]) -> Option<u8> {
+    match msg {
+        [header @ .., 0x08, level, 0xF7] if header == HEADER => Some(*level),
+        _ => None,
     }
 }
 
@@ -459,6 +487,16 @@ mod tests {
             command(&[0x0E, 1]),
             [0xF0, 0x00, 0x20, 0x29, 0x02, 0x0D, 0x0E, 0x01, 0xF7]
         );
+    }
+
+    #[test]
+    fn brightness_replies_parse_and_nothing_else_does() {
+        assert_eq!(parse_brightness(&command(&[0x08, 96])), Some(96));
+        assert_eq!(parse_brightness(&command(&[0x08, 0])), Some(0));
+        // The device also confirms mode changes; those must not be mistaken for it.
+        assert_eq!(parse_brightness(&command(&[0x0E, 0])), None);
+        assert_eq!(parse_brightness(&[0x90, 0x08, 0x7F]), None);
+        assert_eq!(parse_brightness(&command(&[0x08])), None); // the request itself
     }
 
     #[test]

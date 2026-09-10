@@ -31,9 +31,9 @@ brightness, **left/right** change speed, and **Stop/Solo/Mute** quits. The right
 column shows the speed — blue below 1x, green at 1x, red above. Brightness needs no
 indicator, since the whole grid is one.
 
-Both are global: they carry across a change of effect. Brightness is global in a
-stronger sense — it is a setting on the device itself, so wherever you leave it is
-where it stays after the app exits.
+Both are global: they carry across a change of effect. Brightness is a setting on
+the device rather than in the app, but quitting restores whatever level the device
+was on before the app started.
 
 Effects run on a virtual clock, so speed scales everything they do: motion, decay
 trails and spawn rates alike. `pressure map` is the one effect with no time in it,
@@ -64,10 +64,11 @@ for event in events {
 input callback, so events can be polled (`try_recv`) or blocked on. Dropping the
 `Launchpad` clears the LEDs and puts the device back in its standalone mode.
 
-It also turns the device's global brightness up to full. That is a persistent
-device setting — the same one on the Setup menu's LED page — so it stays that way
-after unplugging, and nothing here puts it back. `set_brightness` is the knob if
-you want it lower.
+It also turns the device's global brightness up to full, having first asked the
+device what its brightness was, so dropping the `Launchpad` can put that back. The
+manual documents no default value to restore instead — only that the Setup menu
+offers eight levels — so the pre-run level is the only honest thing to return to.
+`set_brightness` is the knob while you are running.
 
 Buttons are addressed the way the device does it in programmer mode — index
 `row * 10 + column` — with `Pad::xy` / `Pad::top` / `Pad::right` as the sane way in
