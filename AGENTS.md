@@ -254,8 +254,8 @@ and the whole sound path is testable with no hands and no speakers.
 
 `web/` is a Leptos SSR app (axum, built by cargo-leptos) that runs effects
 in-process through `flash-dance-effects`. **It renders no effects itself and must
-not start to.** The list, the grouping and each card's colour all come from the
-library; a second copy here is how the site would start lying about what the
+not start to.** The list, the grouping, each card's colour and its `?` text
+(`Effect::about`) all come from the library; a second copy here is how the site would start lying about what the
 device can do. If the site needs to know something new, the library should say it.
 
 The parts that are not obvious:
