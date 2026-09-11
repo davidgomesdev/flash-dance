@@ -14,7 +14,10 @@ api/           the `flash-dance` crate: the MIDI driver, plus the drawing
                primitives every app shares (Grid, hsv, Clock, Rng)
 audio/         the `flash-dance-audio` crate: sound in, a level, eight bands
                and a beat out. Nothing here knows about Launchpads
-apps/effects/  18 LED effects, a picker and a speed control; `-- <name>` starts on one
+web/           a Leptos site that runs the `effects` binary for you
+effects/       the `flash-dance-effects` crate: 18 LED effects and `run`, the whole
+               session — picker, speed, brightness, quit
+apps/effects/  `run` from a terminal; `-- <name>` starts on one
 apps/paint/    tap grid pads to toggle them
 apps/palette/  browse the device's 128 palette colours and print indices
 apps/whack/    whack-a-mole
@@ -33,12 +36,13 @@ to reach around it.
 
 Each app is its own crate under `apps/`, picked up by the `apps/*` glob in the
 workspace manifest, `publish = false`, depending on `flash-dance = { workspace = true }`.
-Add one with `cargo new --bin apps/<name>`. Apps do not depend on each other; if
-two of them want the same helper, it belongs in the API.
+Add one with `cargo new --bin apps/<name>`. Apps do not depend on each other, and
+nothing depends on an app: code two things want lives in a library crate —
+`api/`, `audio/` or `effects/` — never in `apps/`.
 
 Inside the API there is deliberately no module tree, no error enum, no trait
 abstraction, and **no `Effect` trait** — effects are plain methods on one flat
-struct in `apps/effects`, and a trait with fourteen implementations would buy
+struct in `effects/`, and a trait with eighteen implementations would buy
 nothing. The device has one model and one protocol; if you are asked to support a
 Launchpad Pro or MK2, that is the point to generalise — not before.
 
@@ -144,7 +148,7 @@ amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 08 F7' -d -t 1
 ```
 
 `connect` reads the level, raises it to 127, and drop puts the old level back;
-`apps/effects` also puts it on the up/down arrows. Restoring matters because the
+`effects/` also puts it on the up/down arrows. Restoring matters because the
 level **persists on the device** across unplugging — it is the Setup menu's LED
 level — so without it an app that dims the device would leave it dim for
 everything else, Ableton included.
@@ -239,11 +243,58 @@ freeze above was spotted. Expect a second or two of silence at the start: a
 suspended sink takes that long to resume. Combine it with the MIDI injection below
 and the whole sound path is testable with no hands and no speakers.
 
+## The website
+
+`web/` is a Leptos SSR app (axum, built by cargo-leptos) that runs effects
+in-process through `flash-dance-effects`. **It renders no effects itself and must
+not start to.** The list, the grouping and each card's colour all come from the
+library; a second copy here is how the site would start lying about what the
+device can do. If the site needs to know something new, the library should say it.
+
+The parts that are not obvious:
+
+- **An effect is `run` on its own thread, stopped by a flag.** `runner::halt` sets
+  the session's `AtomicBool` and *joins* — at most a frame. Joining is not
+  politeness: returning is what runs the `Launchpad`'s `Drop`, which clears the
+  LEDs, restores brightness, leaves programmer mode and releases the MIDI port the
+  next session needs. Do not reach for anything that ends the thread less
+  gracefully; there is no such thing that also runs `Drop`.
+- **One session, ever.** The Launchpad has one MIDI port and a session holds it.
+  Starting one stops the last.
+- **The page polls, and the grid must sit under a `Transition`.** A session can end
+  without the server asking — the device's own Stop/Solo/Mute, or no Launchpad
+  plugged in — so the page asks every 1.5 s. Every card reads that status for its
+  highlight, and a `Suspense` falls back on *every* reload of what it reads: under
+  one, each poll tore down and rebuilt all eighteen cards, which looked like the
+  page refreshing itself. A `Transition` only falls back on the first load.
+- The session's error is a `String` by the time it reaches the page, because the
+  library's `Box<dyn Error>` is not `Send` and cannot leave the thread.
+- A `kill -9` of the server leaves the device lit, like any app. Ctrl+C is fine:
+  the shutdown hook stops the session first.
+- The web crate defaults to the `ssr` feature so an ordinary `cargo build
+  --workspace` builds the server and nothing has to know about cargo-leptos, which
+  passes the features itself for each of its two builds. The effects library is an
+  `ssr`-only dependency — it pulls in MIDI and ALSA, which cannot build for wasm.
+
+### Checking the page in a browser
+
+Chrome drives headless over the DevTools protocol with nothing but Python's
+`websockets`. That is how the flicker above was found and its fix proved: a
+`MutationObserver` counting removed cards went 1, 2, 3, 4 across four polls before,
+and stayed at 0 after — including while a session started, failed and stopped
+underneath it. Count DOM teardowns rather than looking for the fallback text; most
+last under the 200 ms a sampler would take to see them.
+
+This is the one crate exempt from the "one dependency" rule below; a web framework
+was the ask. Nothing it pulls in may leak into `api/`, `audio/`, `effects/` or
+`apps/`.
+
 ## Working on this
 
 ```bash
-cargo test --workspace   # 15 unit tests: pads, colour, grid, rng, clock, SysEx,
-                         # parsing, FFT, bands, gain
+cargo test --workspace   # 17 unit tests: pads, colour, grid, rng, clock, SysEx,
+                         # parsing, FFT, bands, gain, effect names
+cargo leptos serve       # the website, on :3000
 cargo clippy --workspace --all-targets
 cargo fmt
 cargo run -p effects     # any app; needs the device plugged in

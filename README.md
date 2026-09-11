@@ -4,7 +4,8 @@ A small Rust API for the Novation Launchpad Mini MK3 over USB MIDI: set the butt
 LEDs, receive the button presses. The lights flash, the pads get danced on.
 
 A cargo workspace: `api/` is the Launchpad library, `audio/` listens to whatever
-the machine is playing or hearing, `apps/*` are the things built on them.
+the machine is playing or hearing, `apps/*` are the things built on them, and
+`web/` is a website that runs them ([below](#the-website)).
 Most apps quit with the top-left button; `effects` and `snake` use the arrows for
 their own controls, so those two quit with **Stop/Solo/Mute** (bottom of the right
 column) instead.
@@ -44,6 +45,36 @@ trails and spawn rates alike. Speed does nothing to the ones with no time in the
 their input.
 
 `cargo run -p effects -- fire` starts on a named effect instead of the first.
+
+The effects themselves are a library, `flash-dance-effects`: `run(effect, source,
+stop)` is the whole session — picker, arrows and quit button included — and the
+`effects` binary is a few lines of argument parsing around it.
+
+## The website
+
+```bash
+cargo install cargo-leptos          # once
+rustup target add wasm32-unknown-unknown
+cargo leptos serve                  # http://127.0.0.1:3000
+```
+
+A page of cards, one per effect, in the same colour that effect's pad has in the
+device's own picker. Click one and it runs; click another and it switches; the bar
+at the top says what is going and stops it.
+
+The server runs effects in-process through `flash-dance-effects` — the list, the
+grouping and the colours come from the same library, and an effect started here
+is the very session the `effects` binary runs, on a thread of its own. Only one
+runs at a time, because the Launchpad has one MIDI port.
+
+The one setting on the page is which audio source the sound effects listen to.
+Speed and brightness are deliberately missing: they belong on the device's arrow
+buttons, where your hands already are.
+
+Stopping — the button, switching effects, or Ctrl+C on the server — sets the
+session's stop flag and waits for it to return, so its `Drop` clears the LEDs and
+leaves programmer mode. A `kill -9` of the server skips that and leaves the device
+lit, the same as for any app.
 
 ## Listening
 
