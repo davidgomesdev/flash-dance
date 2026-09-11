@@ -69,9 +69,39 @@ pub struct Source {
     pub monitor: bool,
 }
 
+/// A sound-server command, with the runtime directory filled in when the
+/// environment is missing one.
+fn command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    if let Some(dir) = runtime_dir() {
+        cmd.env("XDG_RUNTIME_DIR", dir);
+    }
+    cmd
+}
+
+/// PulseAudio finds its socket under `XDG_RUNTIME_DIR`, and a process started
+/// outside a login session — a systemd unit, a cron job, an agent's shell — often
+/// has none. Then libpulse fails with "Connection refused", which sounds like a
+/// dead sound server and is not one. The spec's own default for the variable is
+/// `/run/user/<uid>`, so supply that rather than the misleading error.
+///
+/// `None` when the environment already has one, which is never overridden.
+fn runtime_dir() -> Option<String> {
+    if std::env::var_os("XDG_RUNTIME_DIR").is_some_and(|dir| !dir.is_empty()) {
+        return None;
+    }
+    use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata("/proc/self").ok()?.uid();
+    let dir = format!("/run/user/{uid}");
+    std::path::Path::new(&dir)
+        .join("pulse")
+        .is_dir()
+        .then_some(dir)
+}
+
 /// Every source the sound server will let us record from.
 pub fn sources() -> Result<Vec<Source>> {
-    let out = Command::new("pactl")
+    let out = command("pactl")
         .args(["list", "short", "sources"])
         .output()
         .map_err(|e| format!("could not run pactl ({e}) — install pulseaudio-utils"))?;
@@ -129,7 +159,7 @@ impl Audio {
     }
 
     fn record(source: &str) -> Result<Audio> {
-        let mut child = Command::new("parec")
+        let mut child = command("parec")
             .args([
                 "--format=s16le",
                 "--channels=1",
