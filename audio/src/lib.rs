@@ -1,5 +1,6 @@
-//! What the machine can hear, as numbers an effect can draw: a loudness, eight
-//! octave bands and a beat flag.
+//! What the machine can hear, as numbers an effect can draw: eight octave bands,
+//! where the sound sits among them and a beat flag. None of it depends on how
+//! loud the source is — only on which frequencies it is made of.
 //!
 //! Capture is a `parec` child process, so **any PulseAudio/PipeWire source works
 //! the same way** — a microphone, a line input, or a `.monitor` source, which is
@@ -11,7 +12,7 @@
 //! # fn main() -> flash_dance_audio::Result<()> {
 //! let mut audio = flash_dance_audio::Audio::open(None)?; // default: system sound
 //! let sound = audio.listen();
-//! println!("{:.2} {:?} {}", sound.level, sound.bands, sound.beat);
+//! println!("{:.2} {:?} {}", sound.pitch, sound.bands, sound.beat);
 //! # Ok(()) }
 //! ```
 
@@ -37,13 +38,16 @@ const RATE: u32 = 22050;
 pub const BANDS: usize = 8;
 const BASE_HZ: f32 = 40.0;
 
-/// What one window of audio sounded like. Everything is `0.0..=1.0` and normalised
-/// by a running gain, so a quiet microphone and a loud monitor both fill the grid.
+/// What one window of audio sounded like. Everything is `0.0..=1.0` and relative to
+/// the window itself, so the same music gives the same numbers at any volume, from
+/// a quiet microphone or a loud monitor alike.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Sound {
-    /// Loudness of the window.
-    pub level: f32,
-    /// Energy per octave band, `bands[0]` the lowest.
+    /// Where the sound sits in the 40 Hz – 10 kHz range: the energy-weighted mean
+    /// octave, `0.0` all bass and `1.0` all treble.
+    pub pitch: f32,
+    /// Energy per octave band, `bands[0]` the lowest, as a share of the loudest
+    /// band in the same window — the shape of the spectrum, not its size.
     pub bands: [f32; BANDS],
     /// Set for the single window on which a beat was detected.
     pub beat: bool,
@@ -125,8 +129,6 @@ pub struct Audio {
     child: Child,
     source: String,
     window: Arc<Mutex<Ring>>,
-    level_gain: Agc,
-    band_gain: Agc,
     bass_avg: f32,
     last_beat: Instant,
     last: Instant,
@@ -194,8 +196,6 @@ impl Audio {
             child,
             source: source.to_string(),
             window,
-            level_gain: Agc::new(),
-            band_gain: Agc::new(),
             bass_avg: 0.0,
             last_beat: now,
             last: now,
@@ -207,31 +207,24 @@ impl Audio {
         &self.source
     }
 
-    /// Analyses the most recent window. Call it once a frame — the gain, the beat
-    /// average and the beat's refractory period all advance from here.
+    /// Analyses the most recent window. Call it once a frame — the beat average and
+    /// the beat's refractory period advance from here.
     pub fn listen(&mut self) -> Sound {
         let now = Instant::now();
-        // A long gap (the app was in its picker, say) must not flush the averages.
+        // A long gap (the app was in its picker, say) must not flush the average.
         let dt = (now - self.last).as_secs_f32().min(0.5);
         self.last = now;
 
         let samples = self.window.lock().unwrap_or_else(|e| e.into_inner()).read();
-        let rms = (samples.iter().map(|s| s * s).sum::<f32>() / WINDOW as f32).sqrt();
-        let raw = bands_of(&samples);
+        let Some(raw) = heard(&samples) else {
+            return Sound::default();
+        };
 
-        let loudest = raw.iter().copied().fold(0.0, f32::max);
-        let scale = self.band_gain.follow(loudest, dt, BAND_FLOOR);
-        let mut bands = raw;
-        for band in &mut bands {
-            // Square root because the top of the range is where the eye stops
-            // noticing: a linear bar spends most of its travel looking full.
-            *band = (*band * scale).clamp(0.0, 1.0).sqrt();
-        }
-
+        // A ratio of the bass to its own recent past, so turning the source up or
+        // down scales both sides and leaves the beats where they were.
         let bass = raw[0] + raw[1];
-        let beat = bass > self.bass_avg * BEAT_RATIO
-            && bass > BAND_FLOOR
-            && now.duration_since(self.last_beat) > BEAT_GAP;
+        let beat =
+            bass > self.bass_avg * BEAT_RATIO && now.duration_since(self.last_beat) > BEAT_GAP;
         if beat {
             self.last_beat = now;
         }
@@ -239,11 +232,7 @@ impl Audio {
         // over a fixed number of frames.
         self.bass_avg += (bass - self.bass_avg) * (1.0 - 0.1f32.powf(dt));
 
-        Sound {
-            level: (rms * self.level_gain.follow(rms, dt, LEVEL_FLOOR)).clamp(0.0, 1.0),
-            bands,
-            beat,
-        }
+        Sound { beat, ..shape(raw) }
     }
 }
 
@@ -259,27 +248,35 @@ impl Drop for Audio {
 const BEAT_RATIO: f32 = 1.5;
 /// No two beats closer than this — one kick spans several windows.
 const BEAT_GAP: Duration = Duration::from_millis(120);
-/// Quietest signal the gain will still normalise to full. Below these the input is
-/// treated as silence rather than amplified into noise; they are the one knob to
-/// turn if a quiet source looks dead or a silent one flickers.
-const BAND_FLOOR: f32 = 0.35;
-const LEVEL_FLOOR: f32 = 0.004;
+/// RMS below which a window is silence, about -66 dBFS. The one place volume still
+/// counts: without it, a room's hiss or a stream's dither would be scaled up like
+/// anything else and drawn as a full spectrum. Raise it if a microphone in a quiet
+/// room still lights the grid; lower it if a quiet source looks dead.
+const SILENCE: f32 = 5e-4;
 
-/// Automatic gain: rises to a new peak at once, forgets an old one slowly, so an
-/// effect fills the grid whatever the source's level is.
-struct Agc {
-    peak: f32,
+/// The raw band energies of a window, or `None` when it is silence.
+fn heard(samples: &[f32; WINDOW]) -> Option<[f32; BANDS]> {
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / WINDOW as f32).sqrt();
+    (rms >= SILENCE).then(|| bands_of(samples))
 }
 
-impl Agc {
-    fn new() -> Agc {
-        Agc { peak: 0.0 }
-    }
-
-    /// The factor `raw` should be multiplied by to sit in `0.0..=1.0`.
-    fn follow(&mut self, raw: f32, dt: f32, floor: f32) -> f32 {
-        self.peak = self.peak.max(raw) * 0.6f32.powf(dt); // halves in about 1.4 s
-        1.0 / self.peak.max(floor)
+/// The volume-free part of a [`Sound`]: every band over the loudest, so scaling the
+/// input scales both and cancels out.
+fn shape(raw: [f32; BANDS]) -> Sound {
+    let loudest = raw.iter().copied().fold(f32::MIN_POSITIVE, f32::max);
+    let total: f32 = raw.iter().sum::<f32>().max(f32::MIN_POSITIVE);
+    let centre: f32 = raw
+        .iter()
+        .enumerate()
+        .map(|(i, e)| i as f32 * e)
+        .sum::<f32>()
+        / total;
+    Sound {
+        pitch: centre / (BANDS - 1) as f32,
+        // Square root because the top of the range is where the eye stops noticing:
+        // a linear bar spends most of its travel looking full.
+        bands: raw.map(|band| (band / loudest).sqrt()),
+        beat: false,
     }
 }
 
@@ -439,23 +436,44 @@ mod tests {
         assert_eq!(bands_of(&[0.0; WINDOW]), [0.0; BANDS]);
     }
 
+    /// Two tones at once, a bass note and a treble one, at `amplitude`.
+    fn chord(amplitude: f32) -> [f32; WINDOW] {
+        let (low, high) = (tone(100.0), tone(3000.0));
+        std::array::from_fn(|i| amplitude * (low[i] + 0.3 * high[i]) / 1.3)
+    }
+
     #[test]
-    fn the_gain_normalises_quiet_and_loud_alike() {
-        for amplitude in [0.02, 1.0] {
-            let mut agc = Agc::new();
-            let mut out = 0.0;
-            // A steady tone: whatever its level, the gain should settle on full.
-            for _ in 0..30 {
-                out = amplitude * agc.follow(amplitude, 1.0 / 30.0, 1e-6);
+    fn volume_changes_nothing() {
+        let loud = shape(heard(&chord(1.0)).unwrap());
+        for amplitude in [0.3, 0.01, 0.002] {
+            let quiet = shape(heard(&chord(amplitude)).unwrap());
+            assert!(
+                (quiet.pitch - loud.pitch).abs() < 1e-3,
+                "{amplitude}: pitch {quiet:?}"
+            );
+            for (q, l) in quiet.bands.iter().zip(loud.bands) {
+                assert!(
+                    (q - l).abs() < 1e-3,
+                    "{amplitude}: {:?} vs {:?}",
+                    quiet.bands,
+                    loud.bands
+                );
             }
-            assert!((out - 1.0).abs() < 0.05, "{amplitude} settled at {out}");
         }
     }
 
     #[test]
-    fn the_gain_floor_keeps_silence_dark() {
-        let mut agc = Agc::new();
-        assert!(0.0001 * agc.follow(0.0001, 1.0 / 30.0, LEVEL_FLOOR) < 0.05);
+    fn pitch_rises_with_frequency() {
+        let pitch = |hz| shape(bands_of(&tone(hz))).pitch;
+        assert!(pitch(60.0) < 0.1 && pitch(8000.0) > 0.9);
+        assert!(pitch(60.0) < pitch(500.0) && pitch(500.0) < pitch(8000.0));
+    }
+
+    #[test]
+    fn silence_stays_dark() {
+        assert_eq!(heard(&[0.0; WINDOW]), None);
+        // Hiss at about -80 dBFS: quiet enough to be nothing.
+        assert_eq!(heard(&tone(5000.0).map(|s| s * 1e-4)), None);
     }
 
     #[test]

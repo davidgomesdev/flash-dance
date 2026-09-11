@@ -4,7 +4,8 @@ A small Rust API for the Novation Launchpad Mini MK3 over USB MIDI: set the butt
 LEDs, receive the button presses. The lights flash, the pads get danced on.
 
 A cargo workspace: `api/` is the Launchpad library, `audio/` listens to whatever
-the machine is playing or hearing, `apps/*` are the things built on them.
+the machine is playing or hearing, `apps/*` are the things built on them, and
+`web/` is a website that runs them ([below](#the-website)).
 Most apps quit with the top-left button; `effects` and `snake` use the arrows for
 their own controls, so those two quit with **Stop/Solo/Mute** (bottom of the right
 column) instead.
@@ -27,7 +28,7 @@ starfield, colour wipe.
 **Reactive:** ripple on press, comet trail, velocity heat (colour by how hard you
 hit), lasers, gravity, pressure map.
 
-**Sound:** spectrum, vu meter, beat rings, sound fire — see [Listening](#listening).
+**Sound:** spectrum, pitch meter, beat rings, sound fire — see [Listening](#listening).
 
 Controls: **User** (top row, rightmost) opens the picker, **up/down** change
 brightness, **left/right** change speed, and **Stop/Solo/Mute** quits. The right
@@ -40,22 +41,54 @@ was on before the app started.
 
 Effects run on a virtual clock, so speed scales everything they do: motion, decay
 trails and spawn rates alike. Speed does nothing to the ones with no time in them
-— `pressure map`, `spectrum` and `vu meter`, which are only ever a picture of
+— `pressure map`, `spectrum` and `pitch meter`, which are only ever a picture of
 their input.
 
 `cargo run -p effects -- fire` starts on a named effect instead of the first.
 
+The effects themselves are a library, `flash-dance-effects`: `run(effect, source,
+stop)` is the whole session — picker, arrows and quit button included — and the
+`effects` binary is a few lines of argument parsing around it.
+
+## The website
+
+```bash
+cargo install cargo-leptos          # once
+rustup target add wasm32-unknown-unknown
+cargo leptos serve                  # http://127.0.0.1:3000
+```
+
+A page of cards, one per effect, in the same colour that effect's pad has in the
+device's own picker. Click one and it runs; click another and it switches; the bar
+at the top says what is going and stops it. The `?` on a card says what that
+effect looks like and what it responds to.
+
+The server runs effects in-process through `flash-dance-effects` — the list, the
+grouping, the colours and the descriptions come from the same library, and an effect started here
+is the very session the `effects` binary runs, on a thread of its own. Only one
+runs at a time, because the Launchpad has one MIDI port.
+
+The one setting on the page is which audio source the sound effects listen to.
+Speed and brightness are deliberately missing: they belong on the device's arrow
+buttons, where your hands already are.
+
+Stopping — the button, switching effects, or Ctrl+C on the server — sets the
+session's stop flag and waits for it to return, so its `Drop` clears the LEDs and
+leaves programmer mode. A `kill -9` of the server skips that and leaves the device
+lit, the same as for any app.
+
 ## Listening
 
 The four sound effects analyse whatever the machine is playing, and need nothing
-set up: `flash-dance-audio` records a PulseAudio/PipeWire source and hands back a
-loudness, eight octave bands and a beat flag.
+set up: `flash-dance-audio` records a PulseAudio/PipeWire source and hands back
+eight octave bands, a pitch and a beat flag. None of them depends on the volume:
+the same song gives the same picture whether it is playing loud or quiet.
 
 ```rust
 let mut audio = Audio::open(None)?;   // the first monitor source: system sound
 let sound = audio.listen();           // call once a frame
-sound.level;   // 0..1, normalised by a running gain, so any source fills the grid
-sound.bands;   // 8 of them, 40 Hz to 10 kHz, an octave each
+sound.bands;   // 8 of them, 40 Hz to 10 kHz, an octave each, relative to the loudest
+sound.pitch;   // 0..1, where the sound sits between bass and treble
 sound.beat;    // set on the one window a beat was found on
 ```
 

@@ -1,0 +1,8 @@
+[package]
+name = "flash-dance-effects"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flash-dance = { workspace = true }
+flash-dance-audio = { workspace = true }

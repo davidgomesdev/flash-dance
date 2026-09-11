@@ -5,5 +5,4 @@ edition = "2024"
 publish = false
 
 [dependencies]
-flash-dance = { workspace = true }
-flash-dance-audio = { workspace = true }
+flash-dance-effects = { workspace = true }

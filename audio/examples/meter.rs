@@ -26,8 +26,8 @@ fn main() -> Result<()> {
             })
             .collect();
         println!(
-            "level {:.2}  bands {bars}  {}",
-            sound.level,
+            "pitch {:.2}  bands {bars}  {}",
+            sound.pitch,
             if sound.beat { "beat" } else { "" }
         );
     }
