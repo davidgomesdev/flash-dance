@@ -220,10 +220,17 @@ Three things in there were found the hard way:
   always ends on the newest sample, so the extra length costs no latency on an
   onset — a kick is just averaged with a little more of what came before it.
 
-Everything comes out `0.0..=1.0` through a running gain (fast attack, ~1.4 s
-release) so a quiet microphone and a loud monitor both fill the grid. `BAND_FLOOR`
-and `LEVEL_FLOOR` are the knobs: too low and silence flickers, too high and a
-quiet source looks dead.
+**Nothing an effect sees depends on the volume** — only on which frequencies are
+there. The bands are divided by the loudest band of the same window, the pitch is
+an energy-weighted mean octave, and a beat is the bass against its own running
+average: scaling the input scales both sides of each and cancels out. Do not
+bring back a running gain or a loudness field; the old `level` (and the vu meter
+drawn from it) was removed for exactly this. `volume_changes_nothing` guards it.
+
+The one exception is `SILENCE`, an RMS gate at about -66 dBFS: below it a window
+is `Sound::default()`, because otherwise hiss or dither would be scaled up to a
+full spectrum like anything else. Raise it if a microphone in a quiet room still
+lights the grid; lower it if a quiet source looks dead.
 
 ### Testing sound without playing anything aloud
 

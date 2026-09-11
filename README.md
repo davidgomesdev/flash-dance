@@ -28,7 +28,7 @@ starfield, colour wipe.
 **Reactive:** ripple on press, comet trail, velocity heat (colour by how hard you
 hit), lasers, gravity, pressure map.
 
-**Sound:** spectrum, vu meter, beat rings, sound fire — see [Listening](#listening).
+**Sound:** spectrum, pitch meter, beat rings, sound fire — see [Listening](#listening).
 
 Controls: **User** (top row, rightmost) opens the picker, **up/down** change
 brightness, **left/right** change speed, and **Stop/Solo/Mute** quits. The right
@@ -41,7 +41,7 @@ was on before the app started.
 
 Effects run on a virtual clock, so speed scales everything they do: motion, decay
 trails and spawn rates alike. Speed does nothing to the ones with no time in them
-— `pressure map`, `spectrum` and `vu meter`, which are only ever a picture of
+— `pressure map`, `spectrum` and `pitch meter`, which are only ever a picture of
 their input.
 
 `cargo run -p effects -- fire` starts on a named effect instead of the first.
@@ -79,14 +79,15 @@ lit, the same as for any app.
 ## Listening
 
 The four sound effects analyse whatever the machine is playing, and need nothing
-set up: `flash-dance-audio` records a PulseAudio/PipeWire source and hands back a
-loudness, eight octave bands and a beat flag.
+set up: `flash-dance-audio` records a PulseAudio/PipeWire source and hands back
+eight octave bands, a pitch and a beat flag. None of them depends on the volume:
+the same song gives the same picture whether it is playing loud or quiet.
 
 ```rust
 let mut audio = Audio::open(None)?;   // the first monitor source: system sound
 let sound = audio.listen();           // call once a frame
-sound.level;   // 0..1, normalised by a running gain, so any source fills the grid
-sound.bands;   // 8 of them, 40 Hz to 10 kHz, an octave each
+sound.bands;   // 8 of them, 40 Hz to 10 kHz, an octave each, relative to the loudest
+sound.pitch;   // 0..1, where the sound sits between bass and treble
 sound.beat;    // set on the one window a beat was found on
 ```
 
