@@ -59,7 +59,7 @@ pub enum Effect {
     PressureMap,
     // Sound: driven by what the machine hears.
     Spectrum,
-    VuMeter,
+    PitchMeter,
     BeatRings,
     SoundFire,
 }
@@ -83,7 +83,7 @@ pub const EFFECTS: [Effect; 18] = [
     Gravity,
     PressureMap,
     Spectrum,
-    VuMeter,
+    PitchMeter,
     BeatRings,
     SoundFire,
 ];
@@ -106,7 +106,7 @@ impl Effect {
             Gravity => "gravity",
             PressureMap => "pressure map",
             Spectrum => "spectrum",
-            VuMeter => "vu meter",
+            PitchMeter => "pitch meter",
             BeatRings => "beat rings",
             SoundFire => "sound fire",
         }
@@ -124,7 +124,7 @@ impl Effect {
         match self {
             Rainbow | Plasma | Fire | Rain | Rings | Radar | Starfield | Wipe => "ambient",
             PressRipple | Comet | VelocityHeat | Lasers | Gravity | PressureMap => "reactive",
-            Spectrum | VuMeter | BeatRings | SoundFire => "sound",
+            Spectrum | PitchMeter | BeatRings | SoundFire => "sound",
         }
     }
 }
@@ -251,9 +251,9 @@ impl App {
                 let heard = self.sound();
                 self.spectrum(heard)
             }
-            VuMeter => {
+            PitchMeter => {
                 let heard = self.sound();
-                self.vu_meter(heard)
+                self.pitch_meter(heard)
             }
             BeatRings => {
                 let heard = self.sound();
@@ -495,21 +495,22 @@ impl App {
         }
     }
 
-    /// The whole grid as one 64-LED meter, filling row by row from the bottom left.
-    fn vu_meter(&mut self, sound: Sound) {
-        let lit = sound.level * 64.0;
+    /// The whole grid as one 64-LED meter of where the sound sits between bass and
+    /// treble, filling row by row from the bottom left. Dark in silence.
+    fn pitch_meter(&mut self, sound: Sound) {
+        let lit = sound.pitch * 64.0;
         for (x, y) in cells() {
             let led = ((7 - y) * 8 + x) as f32;
-            // Green at the quiet end of the scale, red at the top of it.
+            // Red at the bass end of the scale, blue at the treble end.
             self.grid.set(
                 x,
                 y,
-                hsv(0.33 * (1.0 - led / 63.0), 1.0, (lit - led).clamp(0.0, 1.0)),
+                hsv(0.66 * led / 63.0, 1.0, (lit - led).clamp(0.0, 1.0)),
             );
         }
     }
 
-    /// A ring out of the centre on every beat, over a glow that follows the volume.
+    /// A ring out of the centre on every beat, over a glow that follows the bass.
     fn beat_rings(&mut self, t: f32, sound: Sound) {
         if sound.beat {
             self.hue = (self.hue + 0.13).rem_euclid(1.0);
@@ -520,7 +521,7 @@ impl App {
                 hue: self.hue,
             });
         }
-        self.grid.fill(hsv(self.hue, 1.0, sound.level * 0.12));
+        self.grid.fill(hsv(self.hue, 1.0, sound.bass() * 0.12));
         self.draw_ripples(t);
     }
 }
