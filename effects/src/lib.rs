@@ -112,6 +112,47 @@ impl Effect {
         }
     }
 
+    /// What it looks like and what it responds to, in a sentence or two.
+    pub fn about(self) -> &'static str {
+        match self {
+            Rainbow => "A rainbow laid diagonally across the grid, drifting slowly.",
+            Plasma => "Overlapping waves of colour that swirl and melt into each other.",
+            Fire => "Flames rising from the bottom row, white-hot at the base and red at the tips.",
+            Rain => "Blue-green drops falling down random columns, leaving short trails.",
+            Rings => "Rings of colour pulsing out from the centre, one after another.",
+            Radar => "A beam turning around the centre, leaving a fading afterglow.",
+            Starfield => "Stars blinking on at random and slowly fading out.",
+            Wipe => "A solid colour sweeping across from left to right, a new one each pass.",
+            PressRipple => {
+                "Press a pad and a ring spreads out from it. \
+                 Soft presses are red, harder ones shift through yellow to green."
+            }
+            Comet => {
+                "Pads light up when pressed and fade slowly, so a swipe leaves a trail. \
+                 The colour follows the column."
+            }
+            VelocityHeat => "Pads light by how hard you hit them: soft is blue, hard is red.",
+            Lasers => "Each press fires beams along its row and column, crossing in a white flash.",
+            Gravity => "Pressed pads fall to the bottom and stack up. A full column empties.",
+            PressureMap => {
+                "A heat map of where you have played: each press warms a pad from blue \
+                 towards red, and nothing fades."
+            }
+            Spectrum => "A bar per frequency band, bass on the left and treble on the right.",
+            PitchMeter => {
+                "Fills the grid from the bottom: low for bass-heavy sound, high for bright, \
+                 trebly sound. Dark in silence."
+            }
+            BeatRings => {
+                "A ring bursts from the centre on every beat, a new colour each time, \
+                 over a glow that follows the bass."
+            }
+            SoundFire => {
+                "The fire, fed by the bass: embers when it is thin, a flare-up on every kick."
+            }
+        }
+    }
+
     /// Signature colour, used for this effect's pad in the picker.
     pub fn hue(self) -> f32 {
         EFFECTS.iter().position(|e| *e == self).unwrap_or(0) as f32 / EFFECTS.len() as f32

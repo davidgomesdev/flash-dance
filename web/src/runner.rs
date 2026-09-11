@@ -37,6 +37,7 @@ pub fn effects() -> Vec<EffectInfo> {
         .map(|effect| EffectInfo {
             group: effect.group().to_string(),
             name: effect.name().to_string(),
+            about: effect.about().to_string(),
             // The hue its pad has in the device's own picker, so a card here is
             // the colour of the pad there.
             hue: effect.hue(),

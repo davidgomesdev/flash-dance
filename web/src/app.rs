@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 pub struct EffectInfo {
     pub group: String,
     pub name: String,
+    /// What it looks like and what it responds to.
+    pub about: String,
     /// `0.0..1.0`, the effect's signature hue on the device.
     pub hue: f32,
 }
@@ -256,20 +258,37 @@ fn Card(
     let (mine, colour) = (name.clone(), hue(effect.hue));
     let is_running = move || running().as_deref() == Some(mine.as_str());
     let label = name.clone();
+    let about_id = format!("about-{}", name.replace(' ', "-"));
 
+    // The `?` is a sibling of the card, not inside it — a button in a button is
+    // invalid, and a click on it must not start the effect. It opens a native
+    // popover, which needs no signals and works before the page has hydrated.
     view! {
-        <li>
+        <li style=format!("--hue: {colour}")>
             <button
                 class="card"
                 class:running=is_running
-                style=format!("--hue: {colour}")
                 on:click=move |_| {
                     start.dispatch(name.clone());
                 }
             >
                 <span class="swatch"></span>
-                <span class="name">{label}</span>
+                <span class="name">{label.clone()}</span>
             </button>
+            <button
+                class="help"
+                popovertarget=about_id.clone()
+                aria-label=format!("What is {label}?")
+            >
+                "?"
+            </button>
+            <div class="about" id=about_id popover="auto">
+                <h3>
+                    <span class="swatch"></span>
+                    {label}
+                </h3>
+                <p>{effect.about}</p>
+            </div>
         </li>
     }
 }

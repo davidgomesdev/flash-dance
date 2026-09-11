@@ -60,10 +60,11 @@ cargo leptos serve                  # http://127.0.0.1:3000
 
 A page of cards, one per effect, in the same colour that effect's pad has in the
 device's own picker. Click one and it runs; click another and it switches; the bar
-at the top says what is going and stops it.
+at the top says what is going and stops it. The `?` on a card says what that
+effect looks like and what it responds to.
 
 The server runs effects in-process through `flash-dance-effects` — the list, the
-grouping and the colours come from the same library, and an effect started here
+grouping, the colours and the descriptions come from the same library, and an effect started here
 is the very session the `effects` binary runs, on a thread of its own. Only one
 runs at a time, because the Launchpad has one MIDI port.
 
