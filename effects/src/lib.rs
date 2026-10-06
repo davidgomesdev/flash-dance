@@ -607,6 +607,15 @@ fn step(index: usize, by: i32, len: usize) -> Option<usize> {
     (moved != index).then_some(moved)
 }
 
+/// The buttons that do something, in a dim white: noticeable, but not competing
+/// with the effect. The four arrows and the picker button; quit has its own colour.
+fn controls() -> impl Iterator<Item = (Pad, Light)> {
+    (0..4)
+        .map(Pad::top)
+        .chain([MENU])
+        .map(|b| (b, Light::Rgb(30, 30, 30)))
+}
+
 /// Speed as a bar up the right column, leaving the bottom button as quit.
 fn draw_speed(pad: &mut Launchpad, level: usize) -> Result<()> {
     let colour = match level {
@@ -622,21 +631,26 @@ fn draw_speed(pad: &mut Launchpad, level: usize) -> Result<()> {
         };
         (Pad::right(6 - i as u8), light)
     });
-    pad.set_all(bar.chain([(quit_button(), Light::Solid(7))]))
+    pad.set_all(
+        bar.chain([(quit_button(), Light::Solid(7))])
+            .chain(controls()),
+    )
 }
 
 /// One pad per effect in its signature colour, the current one pulsing white.
 fn draw_picker(pad: &mut Launchpad, current: usize) -> Result<()> {
     pad.clear()?;
-    pad.set_all(EFFECTS.iter().enumerate().map(|(i, effect)| {
-        let target = Pad::xy((i % 8) as u8, (i / 8) as u8);
-        if i == current {
-            (target, Light::Pulse(3))
-        } else {
-            let [r, g, b] = hsv(effect.hue(), 1.0, 1.0).map(|c| (c * 127.0) as u8);
-            (target, Light::Rgb(r, g, b))
-        }
-    }))
+    pad.set_all(
+        controls().chain(EFFECTS.iter().enumerate().map(|(i, effect)| {
+            let target = Pad::xy((i % 8) as u8, (i / 8) as u8);
+            if i == current {
+                (target, Light::Pulse(3))
+            } else {
+                let [r, g, b] = hsv(effect.hue(), 1.0, 1.0).map(|c| (c * 127.0) as u8);
+                (target, Light::Rgb(r, g, b))
+            }
+        })),
+    )
 }
 
 /// Runs a session on the device: `start` first, then whatever the picker chooses,
