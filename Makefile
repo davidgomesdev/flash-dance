@@ -1,14 +1,19 @@
 # `make help` lists everything. Pass args with ARGS, e.g. `make effects ARGS=fire`.
 APPS := effects paint palette whack simon snake life
 
-.PHONY: help $(APPS) web meter test check
+.PHONY: help $(APPS) install-leptos web meter test check
 
 help:
 	@echo "apps:  $(APPS)   (ARGS=<effect> for effects, e.g. make effects ARGS=fire)"
-	@echo "other: web  meter (ARGS=<source>)  test  check"
+	@echo "other: install-leptos  web  meter (ARGS=<source>)  test  check"
 
 $(APPS):
 	cargo run -p $@ -- $(ARGS)
+
+# Once, before `make web`.
+install-leptos:
+	cargo install cargo-leptos
+	rustup target add wasm32-unknown-unknown
 
 web:
 	cargo leptos serve
