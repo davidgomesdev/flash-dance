@@ -8,16 +8,31 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use flash_dance_effects::{EFFECTS, Effect};
+use flash_dance::Event;
+use flash_dance_effects::{EFFECTS, Picture, Report};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::app::{EffectInfo, SourceInfo, Status};
+
+/// The session that is not an effect: the grid as a panel, showing [`PICTURE`].
+/// Started by name like any effect, which no effect name collides with.
+pub const PANEL: &str = "panel";
+
+/// What the panel shows. Painted from outside (Home Assistant, over MQTT) whether
+/// or not the panel is running, so switching to it shows the latest picture at once.
+static PICTURE: Mutex<Picture> = Mutex::new([[[0; 3]; 8]; 8]);
+
+/// Who hears the button events of whatever session is running.
+static LISTENER: Mutex<Option<UnboundedSender<Event>>> = Mutex::new(None);
 
 /// The one session. The Launchpad has a single MIDI port and a session holds it
 /// open, so exactly one effect can run at a time — starting one stops the last.
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
 struct Running {
-    effect: Effect,
+    /// What is on the grid now: the panel, or the effect last picked — on the
+    /// device's own picker too, which is why the session reports it.
+    showing: Arc<Mutex<&'static str>>,
     stop: Arc<AtomicBool>,
     /// The error is a `String` because the library's is not `Send`.
     thread: JoinHandle<Result<(), String>>,
@@ -25,9 +40,29 @@ struct Running {
 
 fn running() -> MutexGuard<'static, Option<Running>> {
     // A panic while holding this lock would leave a session we still want to stop.
-    RUNNING
+    lock(&RUNNING)
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Sets one pad of the panel's picture, `x` from the left and `y` from the top.
+/// Off-grid pads are ignored.
+pub fn paint(x: usize, y: usize, rgb: [u8; 3]) {
+    if let Some(pad) = lock(&PICTURE).get_mut(y).and_then(|row| row.get_mut(x)) {
+        *pad = rgb;
+    }
+}
+
+/// Every button event from now on, from every session. There is one listener;
+/// a second call takes over from the first.
+pub fn listen() -> UnboundedReceiver<Event> {
+    let (tx, rx) = unbounded_channel();
+    *lock(&LISTENER) = Some(tx);
+    rx
 }
 
 /// Every effect, in picker order.
@@ -60,28 +95,43 @@ pub fn sources() -> Vec<SourceInfo> {
     sources
 }
 
-/// Starts an effect by its exact name, stopping whatever was running first.
-/// `source` is the audio source for the sound effects; the others ignore it.
+/// Starts an effect by its exact name, or the panel as [`PANEL`], stopping whatever
+/// was running first. `source` is the audio source for the sound effects; the
+/// others ignore it.
 pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
-    let effect = EFFECTS
-        .into_iter()
-        .find(|effect| effect.name() == name)
-        .ok_or_else(|| format!("there is no effect called {name:?}"))?;
+    let effect = EFFECTS.into_iter().find(|effect| effect.name() == name);
+    if effect.is_none() && name != PANEL {
+        return Err(format!("there is no effect called {name:?}"));
+    }
     let source = source.filter(|s| !s.is_empty()).map(String::from);
 
     let mut running = running();
     halt(&mut running);
 
     let stop = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&stop);
+    let showing = Arc::new(Mutex::new(effect.map_or(PANEL, |e| e.name())));
+    let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
+    let report = move |report| match report {
+        Report::Showing(effect) => *lock(&shown) = effect.name(),
+        Report::Event(event) => {
+            // Nobody listening, or the listener gone, is not the session's problem.
+            if let Some(listener) = lock(&LISTENER).as_ref() {
+                let _ = listener.send(event);
+            }
+        }
+    };
     let thread = std::thread::Builder::new()
         .name(format!("effect: {name}"))
         .spawn(move || {
-            flash_dance_effects::run(effect, source.as_deref(), &flag).map_err(|e| e.to_string())
+            match effect {
+                Some(effect) => flash_dance_effects::run(effect, source.as_deref(), &flag, report),
+                None => flash_dance_effects::panel(&PICTURE, &flag, report),
+            }
+            .map_err(|e| e.to_string())
         })
         .map_err(|e| e.to_string())?;
     *running = Some(Running {
-        effect,
+        showing,
         stop,
         thread,
     });
@@ -114,11 +164,11 @@ fn state(running: &mut Option<Running>) -> Status {
     let Some(current) = running.as_ref() else {
         return Status::Idle;
     };
+    let effect = lock(&current.showing).to_string();
     if !current.thread.is_finished() {
-        return Status::Running(current.effect.name().to_string());
+        return Status::Running(effect);
     }
     let ended = running.take().expect("checked above");
-    let effect = ended.effect.name().to_string();
     match ended.thread.join() {
         Ok(Ok(())) => Status::Idle,
         Ok(Err(error)) => Status::Failed { effect, error },
