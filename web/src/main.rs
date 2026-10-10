@@ -23,6 +23,12 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("cannot listen on {address}: {e}"));
     println!("flash-dance on http://{address}");
+    match flash_dance_web::mqtt::options() {
+        Some(options) => {
+            tokio::spawn(flash_dance_web::mqtt::run(options));
+        }
+        None => println!("mqtt: off (set FLASH_DANCE_MQTT to a broker to turn it on)"),
+    }
 
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async {

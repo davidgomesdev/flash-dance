@@ -289,6 +289,45 @@ The parts that are not obvious:
   passes the features itself for each of its two builds. The effects library is an
   `ssr`-only dependency — it pulls in MIDI and ALSA, which cannot build for wasm.
 
+### Home Assistant, over MQTT
+
+`web/src/mqtt.rs` is a bridge to Home Assistant, started from `main` when
+`FLASH_DANCE_MQTT` is set. It is a client of `runner` like the page is, never of the
+device, so the one-session rule and the joining stop hold for it too.
+
+- **Sessions report back.** `effects::run` and `effects::panel` take a
+  `report: impl FnMut(Report)` that hears every button event and every change of
+  effect, the device's own picker included. That is how the light's state names
+  the effect actually showing, and how presses reach HA. It runs on the session's
+  thread, so `runner` never takes `RUNNING` inside it — `halt` holds that lock
+  while it joins, and the two would deadlock.
+- **The panel is a session, not an effect.** `runner::start("panel")` runs
+  `effects::panel`, which shows `runner`'s `PICTURE`. HA paints that picture
+  whether or not the panel is running, and the panel redraws only when it changes.
+  The picture is ordinary 0..255 RGB, divided by 255 into `Grid`; `Grid::lights`
+  then does the gamma step, so do not add another.
+- **`try_publish`, never `publish`.** The bridge is the loop that drains rumqttc's
+  queue; awaiting room in it from that loop would wait forever.
+- **State is polled once a second**, not pushed, so a session ended on the device
+  or started from the website still reaches HA. `status()` reports a failed session
+  once, then idle — the bridge logs the error on that one tick.
+- `rumqttc` is built without default features: no TLS, so no rustls tree on the
+  Pi. Turn `use-rustls` on if a broker ever needs it.
+
+Testing it needs a broker, not Home Assistant. A throwaway Mosquitto works:
+
+```bash
+docker run -d --rm --name fd-mosq -p 18830:1883 -v $PWD/mosq.conf:/mosquitto/config/mosquitto.conf eclipse-mosquitto:2
+#   mosq.conf: "listener 1883" and "allow_anonymous true"
+docker exec -d fd-mosq sh -c 'mosquitto_sub -v -t "#" > /tmp/all.log'
+FLASH_DANCE_MQTT=127.0.0.1:18830 cargo leptos serve
+docker exec fd-mosq mosquitto_pub -t flash-dance/light/set -m '{"state":"ON","effect":"fire"}'
+docker exec fd-mosq cat /tmp/all.log
+```
+
+With no Launchpad plugged in the session fails at once, so the light reports `ON`
+then `OFF` and the server logs why — which is still a full check of the path.
+
 ### Checking the page in a browser
 
 Chrome drives headless over the DevTools protocol with nothing but Python's
@@ -305,8 +344,8 @@ was the ask. Nothing it pulls in may leak into `api/`, `audio/`, `effects/` or
 ## Working on this
 
 ```bash
-cargo test --workspace   # 17 unit tests: pads, colour, grid, rng, clock, SysEx,
-                         # parsing, FFT, bands, gain, effect names
+cargo test --workspace   # 24 unit tests: pads, colour, grid, rng, clock, SysEx,
+                         # parsing, FFT, bands, gain, effect names, MQTT payloads
 cargo leptos serve       # the website, on :3000
 cargo clippy --workspace --all-targets
 cargo fmt

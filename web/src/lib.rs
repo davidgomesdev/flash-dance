@@ -8,6 +8,8 @@
 pub mod app;
 
 #[cfg(feature = "ssr")]
+pub mod mqtt;
+#[cfg(feature = "ssr")]
 pub mod runner;
 
 #[cfg(feature = "hydrate")]

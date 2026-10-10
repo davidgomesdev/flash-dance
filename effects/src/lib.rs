@@ -18,6 +18,7 @@
 //! motion, decay trails, spawn rates — rather than only the ones written against a
 //! wall clock. `pressure map` is the one effect with no time in it at all.
 
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flash_dance::{Clock, Event, Grid, Launchpad, Light, Pad, Result, Rng, hsv};
@@ -653,16 +654,31 @@ fn draw_picker(pad: &mut Launchpad, current: usize) -> Result<()> {
     )
 }
 
+/// What a session tells whoever started it, as it happens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Report {
+    /// The effect now showing: the one it started on, then each one picked.
+    Showing(Effect),
+    /// Every button event, controls included, as the device sent it.
+    Event(Event),
+}
+
 /// Runs a session on the device: `start` first, then whatever the picker chooses,
 /// with the arrows on speed and brightness, until Stop/Solo/Mute is pressed or
 /// `stop` is set. `source` is the audio source the sound effects listen to, by any
-/// part of its name; `None` is whatever the machine is playing.
+/// part of its name; `None` is whatever the machine is playing. `report` hears
+/// what is showing and every button event, on the session's own thread.
 ///
 /// Returns normally either way, so the `Launchpad`'s `Drop` gets to clear the
 /// LEDs, put the brightness back and leave programmer mode. That is why `stop` is
 /// a flag checked once a frame rather than anything more forceful: whatever ends a
 /// session must let it end like this, or the device is left lit.
-pub fn run(start: Effect, source: Option<&str>, stop: &AtomicBool) -> Result<()> {
+pub fn run(
+    start: Effect,
+    source: Option<&str>,
+    stop: &AtomicBool,
+    mut report: impl FnMut(Report),
+) -> Result<()> {
     let (mut pad, events) = Launchpad::connect()?;
     let mut app = App::new(source.map(String::from));
     let mut clock = Clock::new(FPS);
@@ -678,6 +694,7 @@ pub fn run(start: Effect, source: Option<&str>, stop: &AtomicBool) -> Result<()>
     pad.set_brightness(BRIGHTNESS[brightness])?;
     draw_speed(&mut pad, level)?;
     println!("{}", EFFECTS[current].name());
+    report(Report::Showing(EFFECTS[current]));
 
     'running: loop {
         let now = clock.tick(&events, &mut queue);
@@ -691,6 +708,7 @@ pub fn run(start: Effect, source: Option<&str>, stop: &AtomicBool) -> Result<()>
         virtual_time += dt;
 
         for event in &queue {
+            report(Report::Event(*event));
             let Event::Press(button, _) = *event else {
                 continue;
             };
@@ -736,6 +754,7 @@ pub fn run(start: Effect, source: Option<&str>, stop: &AtomicBool) -> Result<()>
                     app.reset(&mut pad)?;
                     draw_speed(&mut pad, level)?;
                     println!("{}", EFFECTS[current].name());
+                    report(Report::Showing(EFFECTS[current]));
                 }
             }
         }
@@ -747,6 +766,60 @@ pub fn run(start: Effect, source: Option<&str>, stop: &AtomicBool) -> Result<()>
 
     println!("{:.1} fps", clock.fps());
     Ok(())
+}
+
+/// A picture for the grid in ordinary 0..=255 RGB, `[y][x]` with the top row first,
+/// the way [`Pad::xy`] counts.
+pub type Picture = [[[u8; 3]; 8]; 8];
+
+/// Runs a session that shows `picture` and nothing else: the grid as a panel that
+/// someone else paints, Home Assistant most likely. It redraws when the picture
+/// changes, reports every event like [`run`], and quits on Stop/Solo/Mute or `stop`,
+/// returning normally for the same reason [`run`] does.
+pub fn panel(
+    picture: &Mutex<Picture>,
+    stop: &AtomicBool,
+    mut report: impl FnMut(Report),
+) -> Result<()> {
+    let (mut pad, events) = Launchpad::connect()?;
+    let mut clock = Clock::new(FPS);
+    let mut queue = Vec::new();
+    let mut shown = None;
+    pad.set(quit_button(), Light::Solid(7))?;
+
+    'running: loop {
+        clock.tick(&events, &mut queue);
+        if stop.load(Ordering::Relaxed) {
+            break 'running;
+        }
+        for event in &queue {
+            report(Report::Event(*event));
+            if matches!(*event, Event::Press(button, _) if button == quit_button()) {
+                break 'running;
+            }
+        }
+        let now = *picture
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if shown != Some(now) {
+            pad.set_all(grid(&now).lights())?;
+            shown = Some(now);
+        }
+    }
+    Ok(())
+}
+
+/// 0..=255 RGB as the grid stores it. Ordinary RGB is already gamma-encoded, and
+/// `Grid::lights` raises by `GAMMA` on the way out, so a straight scale is the
+/// whole conversion: a mid grey from Home Assistant lands as a mid grey.
+fn grid(picture: &Picture) -> Grid {
+    let mut grid = Grid::new();
+    for (y, row) in picture.iter().enumerate() {
+        for (x, rgb) in row.iter().enumerate() {
+            grid.set(x as i32, y as i32, rgb.map(|c| c as f32 / 255.0));
+        }
+    }
+    grid
 }
 
 #[cfg(test)]

@@ -15,7 +15,10 @@ serde = { version = "1", features = ["derive"] }
 
 leptos_axum = { version = "0.8", optional = true }
 axum = { version = "0.8", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"], optional = true }
+rumqttc = { version = "0.25", default-features = false, optional = true }
+serde_json = { version = "1", optional = true }
+flash-dance = { workspace = true, optional = true }
 flash-dance-audio = { workspace = true, optional = true }
 flash-dance-effects = { workspace = true, optional = true }
 
@@ -34,6 +37,9 @@ ssr = [
     "dep:leptos_axum",
     "dep:axum",
     "dep:tokio",
+    "dep:rumqttc",
+    "dep:serde_json",
+    "dep:flash-dance",
     "dep:flash-dance-audio",
     "dep:flash-dance-effects",
 ]

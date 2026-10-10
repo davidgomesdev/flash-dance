@@ -77,6 +77,31 @@ session's stop flag and waits for it to return, so its `Drop` clears the LEDs an
 leaves programmer mode. A `kill -9` of the server skips that and leaves the device
 lit, the same as for any app.
 
+## Home Assistant
+
+Point the website's server at an MQTT broker and the Launchpad shows up in Home
+Assistant by itself, through MQTT discovery — no YAML for the device:
+
+```bash
+FLASH_DANCE_MQTT=homeassistant.local FLASH_DANCE_MQTT_USER=launchpad \
+FLASH_DANCE_MQTT_PASSWORD=... cargo leptos serve
+```
+
+`FLASH_DANCE_MQTT` is `host` or `host:port` (1883 by default); unset, the bridge is
+off. Home Assistant gets one device, **Launchpad**, with:
+
+- a **light**: on starts an effect from its effect list, off stops the session.
+  One extra effect, `panel`, turns the grid into a panel Home Assistant paints;
+- **Audio source**, a select for what the sound effects listen to;
+- **Pad**, an event entity (`event.launchpad_pad`) firing `press` and `release`
+  with the pad's `x`, `y` (from the top left) and the press velocity.
+
+To paint the panel, publish `{"pad": [x, y], "rgb": [r, g, b]}`, or a list of
+them, to `flash-dance/grid/set` — from an automation, with `mqtt.publish`. The
+picture is kept while an effect runs, so switching to `panel` shows it at once.
+The bridge publishes `online` on `flash-dance/availability` each time it
+connects; trigger on that to repaint everything after a restart.
+
 ## Listening
 
 The four sound effects analyse whatever the machine is playing, and need nothing
