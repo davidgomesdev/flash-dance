@@ -15,11 +15,13 @@
 //! Like the website, this only ever goes through [`runner`], so the one-session rule
 //! and the stop that lets `Drop` run hold here too.
 
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use flash_dance::Event;
-use rumqttc::{AsyncClient, Event as Mqtt, LastWill, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event as Mqtt, LastWill, MqttOptions, Outgoing, Packet, QoS};
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 
 use crate::app::Status;
 use crate::runner::{self, PANEL};
@@ -36,7 +38,8 @@ const DISCOVERY: &str = "homeassistant/device/flash_dance/config";
 const HA_STATUS: &str = "homeassistant/status";
 
 /// Where the broker is, from the environment. `FLASH_DANCE_MQTT` is `host` or
-/// `host:port` (1883 by default); unset, the bridge does not run.
+/// `host:port` (1883 by default), an IPv6 address bracketed when it has a port, and
+/// `mqtt://` in front is fine; unset, the bridge does not run.
 /// `FLASH_DANCE_MQTT_USER` and `FLASH_DANCE_MQTT_PASSWORD` log in.
 pub fn options() -> Option<MqttOptions> {
     let (host, port) = address(&std::env::var("FLASH_DANCE_MQTT").ok()?)?;
@@ -60,6 +63,13 @@ pub fn options() -> Option<MqttOptions> {
 }
 
 fn address(value: &str) -> Option<(String, u16)> {
+    let value = value.strip_prefix("mqtt://").unwrap_or(value);
+    if let Ok(socket) = value.parse::<SocketAddr>() {
+        return Some((socket.ip().to_string(), socket.port()));
+    }
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        return Some((ip.to_string(), 1883));
+    }
     match value.rsplit_once(':') {
         Some((host, port)) => Some((host.to_string(), port.parse().ok()?)),
         None if !value.is_empty() => Some((value.to_string(), 1883)),
@@ -67,15 +77,19 @@ fn address(value: &str) -> Option<(String, u16)> {
     }
 }
 
-/// The bridge, forever: reconnecting when the broker goes away, publishing the
+/// The bridge, until `stop`: reconnecting when the broker goes away, publishing the
 /// light's state when the session changes, whoever changed it.
-pub async fn run(options: MqttOptions) {
+pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
     let (client, mut events) = AsyncClient::new(options, 64);
     let mut presses = runner::listen();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
-    let sources: Vec<String> = runner::sources().into_iter().map(|s| s.name).collect();
-    let mut source = sources.first().cloned().unwrap_or_default();
-    // The effect "on" comes back to when HA sends no effect with it.
+    // Sources are read again now and then: on a Pi the sound server can come up
+    // after this does, and a mic can be plugged in later. The first tick is at once.
+    let mut rescan = tokio::time::interval(Duration::from_secs(30));
+    let mut sources: Vec<String> = Vec::new();
+    let mut source = String::new();
+    // The effect "on" comes back to when HA sends no effect with it: whatever was
+    // showing last, picked from HA, the website or the device's own picker.
     let mut last = runner::effects()[0].name.clone();
     // `None` forces the next tick to publish, whatever the state is.
     let mut published: Option<Status> = None;
@@ -97,11 +111,15 @@ pub async fn run(options: MqttOptions) {
                     match command(&message.topic, &message.payload) {
                         Some(Command::On(effect)) => {
                             let effect = effect.unwrap_or_else(|| last.clone());
-                            last = effect.clone();
                             let source = source.clone();
                             // `start` joins the old session, which can take a frame.
                             let started = tokio::task::spawn_blocking(move || {
-                                runner::start(&effect, Some(&source))
+                                // HA sends "on" to a light already on (scenes do);
+                                // restarting would reset its speed and brightness.
+                                if runner::status() == Status::Running(effect.clone()) {
+                                    return Ok(());
+                                }
+                                runner::start(&effect, Some(&source)).map(drop)
                             });
                             if let Ok(Err(error)) = started.await {
                                 eprintln!("mqtt: {error}");
@@ -116,11 +134,7 @@ pub async fn run(options: MqttOptions) {
                             source = name;
                             publish(&client, SOURCE_STATE, true, source.clone());
                         }
-                        Some(Command::Paint(pads)) => {
-                            for (x, y, rgb) in pads {
-                                runner::paint(x, y, rgb);
-                            }
-                        }
+                        Some(Command::Paint(pads)) => runner::paint(&pads),
                         Some(Command::Announce) => {
                             announce(&client, &sources, &source);
                             published = None;
@@ -142,10 +156,28 @@ pub async fn run(options: MqttOptions) {
                     publish(&client, PAD, false, payload.to_string());
                 }
             }
+            _ = rescan.tick() => {
+                let found = tokio::task::spawn_blocking(|| {
+                    runner::sources().into_iter().map(|s| s.name).collect::<Vec<_>>()
+                });
+                let found = found.await.unwrap_or_default();
+                if found != sources {
+                    sources = found;
+                    if !sources.contains(&source) {
+                        source = sources.first().cloned().unwrap_or_default();
+                    }
+                    announce(&client, &sources, &source);
+                }
+            }
             _ = tick.tick() => {
                 // Polled rather than pushed, so it also catches a session ended on the
-                // device's own quit button or started from the website.
-                let status = runner::status();
+                // device's own quit button or started from the website. Blocking, as
+                // it waits for whoever is starting or stopping a session.
+                let status = tokio::task::spawn_blocking(runner::status);
+                let status = status.await.unwrap_or_default();
+                if let Status::Running(effect) = &status {
+                    last = effect.clone();
+                }
                 // Seen once: `status` collects an ended session, then reports idle.
                 if let Status::Failed { effect, error } = &status {
                     eprintln!("mqtt: {effect} stopped: {error}");
@@ -154,6 +186,21 @@ pub async fn run(options: MqttOptions) {
                     publish(&client, LIGHT_STATE, true, light_state(&status).to_string());
                     published = Some(status);
                 }
+            }
+            _ = &mut stop => {
+                // A clean disconnect sends no last will, so say it here: off, and gone.
+                publish(&client, LIGHT_STATE, true, light_state(&Status::Idle).to_string());
+                publish(&client, AVAILABILITY, true, "offline".to_string());
+                let _ = client.try_disconnect();
+                let _ = tokio::time::timeout(Duration::from_secs(1), async {
+                    while let Ok(event) = events.poll().await {
+                        if matches!(event, Mqtt::Outgoing(Outgoing::Disconnect)) {
+                            break;
+                        }
+                    }
+                })
+                .await;
+                return;
             }
         }
     }
@@ -312,6 +359,12 @@ mod tests {
     fn address_defaults_the_port() {
         assert_eq!(address("ha.local"), Some(("ha.local".into(), 1883)));
         assert_eq!(address("10.0.0.2:1884"), Some(("10.0.0.2".into(), 1884)));
+        assert_eq!(
+            address("mqtt://ha.local:1883"),
+            Some(("ha.local".into(), 1883))
+        );
+        assert_eq!(address("fd00::5"), Some(("fd00::5".into(), 1883)));
+        assert_eq!(address("[fd00::5]:1884"), Some(("fd00::5".into(), 1884)));
         assert_eq!(address("ha.local:nope"), None);
         assert_eq!(address(""), None);
     }

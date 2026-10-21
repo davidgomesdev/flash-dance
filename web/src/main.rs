@@ -23,16 +23,25 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("cannot listen on {address}: {e}"));
     println!("flash-dance on http://{address}");
-    match flash_dance_web::mqtt::options() {
-        Some(options) => {
-            tokio::spawn(flash_dance_web::mqtt::run(options));
-        }
-        None => println!("mqtt: off (set FLASH_DANCE_MQTT to a broker to turn it on)"),
+    let bridge = flash_dance_web::mqtt::options().map(|options| {
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        (
+            stop,
+            tokio::spawn(flash_dance_web::mqtt::run(options, stopped)),
+        )
+    });
+    if bridge.is_none() {
+        println!("mqtt: off (set FLASH_DANCE_MQTT to a broker to turn it on)");
     }
 
     axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(async {
+        .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
+            // The bridge first, so no "on" from HA starts a session after the stop.
+            if let Some((stop, bridge)) = bridge {
+                let _ = stop.send(());
+                let _ = bridge.await;
+            }
             // Stop the session and wait for it, so its `Drop` clears the LEDs and
             // leaves programmer mode before the process goes. A SIGKILL skips this
             // and leaves the device lit — nothing in-process can help with that.
