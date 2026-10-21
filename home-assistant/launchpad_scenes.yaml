@@ -38,7 +38,7 @@ blueprint:
         One per pad: `name`, `playlist` (a Spotify URI or link), and optionally
         `effect` (a Launchpad effect), `row` (1 is the top; the pad goes after
         what is on that row already) and `rgb` (the pad's colour, 0-255 each;
-        a rainbow otherwise). For example:
+        white otherwise). For example:
         `[{name: Chill, playlist: "spotify:playlist:…", effect: plasma, row: 2, rgb: [255, 0, 128]}]`
       default: []
       selector:
@@ -98,7 +98,7 @@ actions:
                 {% endfor %}
                 {% for p in playlists %}
                   {% set items.all = items.all + [{
-                    'name': p.name, 'row': p.row | default(0) | int, 'rgb': p.rgb | default(none)}] %}
+                    'name': p.name, 'row': p.row | default(0) | int, 'rgb': p.rgb | default([255, 255, 255])}] %}
                 {% endfor %}
                 {% for item in items.all %}
                   {% if item.row %}{% set ns.y = item.row - 1 %}{% endif %}
