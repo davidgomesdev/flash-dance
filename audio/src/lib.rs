@@ -71,6 +71,7 @@ pub struct Source {
 
 /// A sound-server command, with the runtime directory filled in when the
 /// environment is missing one.
+#[cfg(not(target_os = "macos"))]
 fn command(program: &str) -> Command {
     let mut cmd = Command::new(program);
     if let Some(dir) = runtime_dir() {
@@ -86,6 +87,7 @@ fn command(program: &str) -> Command {
 /// `/run/user/<uid>`, so supply that rather than the misleading error.
 ///
 /// `None` when the environment already has one, which is never overridden.
+#[cfg(not(target_os = "macos"))]
 fn runtime_dir() -> Option<String> {
     if std::env::var_os("XDG_RUNTIME_DIR").is_some_and(|dir| !dir.is_empty()) {
         return None;
@@ -100,6 +102,7 @@ fn runtime_dir() -> Option<String> {
 }
 
 /// Every source the sound server will let us record from.
+#[cfg(not(target_os = "macos"))]
 pub fn sources() -> Result<Vec<Source>> {
     let out = command("pactl")
         .args(["list", "short", "sources"])
@@ -122,6 +125,49 @@ pub fn sources() -> Result<Vec<Source>> {
             })
         })
         .collect())
+}
+
+/// Every input device AVFoundation offers. macOS has no `.monitor` sources:
+/// system sound needs a loopback device such as BlackHole, so that is what counts
+/// as one here.
+#[cfg(target_os = "macos")]
+pub fn sources() -> Result<Vec<Source>> {
+    // ffmpeg lists devices on stderr and then fails on the empty input; the
+    // failure is expected.
+    let out = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-f",
+            "avfoundation",
+            "-list_devices",
+            "true",
+            "-i",
+            "",
+        ])
+        .output()
+        .map_err(|e| format!("could not run ffmpeg ({e}) — brew install ffmpeg"))?;
+    Ok(avfoundation_audio(&String::from_utf8_lossy(&out.stderr))
+        .into_iter()
+        .map(|name| Source {
+            // ponytail: name heuristic, covers BlackHole/Loopback/Soundflower
+            monitor: ["BlackHole", "Loopback", "Soundflower"]
+                .iter()
+                .any(|l| name.contains(l)),
+            name,
+        })
+        .collect())
+}
+
+/// The audio device names in ffmpeg's `-list_devices` output, which lists video
+/// devices first and then audio, each line ending `[<index>] <name>`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn avfoundation_audio(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .skip_while(|line| !line.contains("audio devices:"))
+        .skip(1)
+        .filter_map(|line| Some(line.split_once("] [")?.1.split_once("] ")?.1.to_string()))
+        .collect()
 }
 
 /// A running capture. Dropping it stops the child process.
@@ -153,30 +199,14 @@ impl Audio {
                 .iter()
                 .find(|s| s.monitor)
                 .or_else(|| sources.first())
-                .ok_or("no audio sources — is PipeWire or PulseAudio running?")?,
+                .ok_or("no audio sources found")?,
         };
         Audio::record(&picked.name)
     }
 
     fn record(source: &str) -> Result<Audio> {
-        let mut child = command("parec")
-            .args([
-                "--format=s16le",
-                "--channels=1",
-                "--raw",
-                // Without this parec hands over a second of audio at a time, and
-                // the analysis freezes between deliveries instead of streaming.
-                "--latency-msec=25",
-                &format!("--rate={RATE}"),
-                "-d",
-                source,
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("could not run parec ({e}) — install pulseaudio-utils"))?;
-
-        let mut out = child.stdout.take().ok_or("parec gave us no stdout")?;
+        let mut child = capture(source)?;
+        let mut out = child.stdout.take().ok_or("capture gave us no stdout")?;
         let window = Arc::new(Mutex::new(Ring::new()));
         let sink = Arc::clone(&window);
         std::thread::spawn(move || {
@@ -234,6 +264,53 @@ impl Audio {
 
         Sound { beat, ..shape(raw) }
     }
+}
+
+/// Records `source` as mono s16le at [`RATE`] on stdout.
+#[cfg(not(target_os = "macos"))]
+fn capture(source: &str) -> Result<Child> {
+    let child = command("parec")
+        .args([
+            "--format=s16le",
+            "--channels=1",
+            "--raw",
+            // Without this parec hands over a second of audio at a time, and
+            // the analysis freezes between deliveries instead of streaming.
+            "--latency-msec=25",
+            &format!("--rate={RATE}"),
+            "-d",
+            source,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not run parec ({e}) — install pulseaudio-utils"))?;
+    Ok(child)
+}
+
+#[cfg(target_os = "macos")]
+fn capture(source: &str) -> Result<Child> {
+    Ok(Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+        // Without these ffmpeg buffers audio before writing, and the analysis
+        // freezes between deliveries, like parec without --latency-msec.
+        .args(["-fflags", "nobuffer", "-flags", "low_delay"])
+        .args(["-f", "avfoundation", "-i", &format!(":{source}")])
+        .args([
+            "-ac",
+            "1",
+            "-ar",
+            &RATE.to_string(),
+            "-f",
+            "s16le",
+            "-flush_packets",
+            "1",
+            "-",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not run ffmpeg ({e}) — brew install ffmpeg"))?)
 }
 
 impl Drop for Audio {
@@ -407,6 +484,20 @@ mod tests {
         (0..BANDS)
             .max_by(|a, b| bands[*a].total_cmp(&bands[*b]))
             .unwrap()
+    }
+
+    #[test]
+    fn avfoundation_listing_yields_audio_devices_only() {
+        let listing = "[AVFoundation indev @ 0xb8] AVFoundation video devices:
+[AVFoundation indev @ 0xb8] [0] FaceTime HD Camera
+[AVFoundation indev @ 0xb8] AVFoundation audio devices:
+[AVFoundation indev @ 0xb8] [0] MacBook Pro Microphone
+[AVFoundation indev @ 0xb8] [1] BlackHole 2ch
+[in#0 @ 0xb8c] Error opening input: Input/output error";
+        assert_eq!(
+            avfoundation_audio(listing),
+            ["MacBook Pro Microphone", "BlackHole 2ch"]
+        );
     }
 
     #[test]

@@ -106,6 +106,10 @@ what makes system sound as easy as a microphone — a `.monitor` source is just
 another name. It needs `pulseaudio-utils` installed, and it is the reason the
 sound half is a separate crate: an app that only lights pads never touches it.
 
+On macOS it is an `ffmpeg` (AVFoundation) child instead — `brew install ffmpeg`.
+macOS has no monitor sources, so system sound needs a loopback device such as
+BlackHole; the terminal also needs microphone permission.
+
 ## Usage
 
 ```rust
