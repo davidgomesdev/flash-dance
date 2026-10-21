@@ -659,7 +659,8 @@ fn draw_picker(pad: &mut Launchpad, current: usize) -> Result<()> {
 pub enum Report {
     /// The effect now showing: the one it started on, then each one picked.
     Showing(Effect),
-    /// Every button event, controls included, as the device sent it.
+    /// Every button event, controls included, as the device sent it, except the
+    /// picker's: choosing an effect is not pressing a pad.
     Event(Event),
 }
 
@@ -685,6 +686,8 @@ pub fn run(
     let mut queue = Vec::new();
     let mut current = EFFECTS.iter().position(|e| *e == start).unwrap_or(0);
     let mut picking = false;
+    // Grid pads pressed in the picker, so their releases stay unreported too.
+    let mut picked: Vec<Pad> = Vec::new();
     let (mut wall, mut virtual_time) = (0.0f32, 0.0f32);
     // Global: both outlive a change of effect.
     let mut level = NORMAL_SPEED;
@@ -708,7 +711,15 @@ pub fn run(
         virtual_time += dt;
 
         for event in &queue {
-            report(Report::Event(*event));
+            match *event {
+                Event::Press(button, _) if picking && button.to_xy().is_some() => {
+                    picked.push(button)
+                }
+                Event::Release(button) if picked.contains(&button) => {
+                    picked.retain(|&p| p != button)
+                }
+                _ => report(Report::Event(*event)),
+            }
             let Event::Press(button, _) = *event else {
                 continue;
             };

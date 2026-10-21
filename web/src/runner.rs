@@ -49,11 +49,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Sets one pad of the panel's picture, `x` from the left and `y` from the top.
-/// Off-grid pads are ignored.
-pub fn paint(x: usize, y: usize, rgb: [u8; 3]) {
-    if let Some(pad) = lock(&PICTURE).get_mut(y).and_then(|row| row.get_mut(x)) {
-        *pad = rgb;
+/// Sets pads of the panel's picture, `x` from the left and `y` from the top, under
+/// one lock so the panel never shows half of them. Off-grid pads are ignored.
+pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
+    let mut picture = lock(&PICTURE);
+    for &(x, y, rgb) in pads {
+        if let Some(pad) = picture.get_mut(y).and_then(|row| row.get_mut(x)) {
+            *pad = rgb;
+        }
     }
 }
 
