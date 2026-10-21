@@ -129,7 +129,8 @@ automations, and make an automation from it. It takes:
 Scenes and scripts are coloured in a rainbow, in order. A scene sets how things look; a script
 runs steps, which is what playing music needs. The mood script, with the
 [Spotify](https://www.home-assistant.io/integrations/spotify/) integration
-(Premium only, and the speaker must already be one Spotify knows):
+(Premium only, and the speaker must already be one Spotify knows; check the
+speaker's name in the Spotify entity's `source_list`):
 
 ```yaml
 alias: Launchpad mood
@@ -143,6 +144,16 @@ sequence:
   - action: media_player.select_source
     target: {entity_id: media_player.spotify}
     data: {source: Living room}
+  # Home Assistant offers play_media only once it sees a device playing, and it
+  # polls Spotify: ask it to look again until it does, for up to 10 s.
+  - repeat:
+      sequence:
+        - delay: 1
+        - action: homeassistant.update_entity
+          target: {entity_id: media_player.spotify}
+      until: >-
+        {{ state_attr('media_player.spotify', 'supported_features') | int(0) > 2048
+           or repeat.index >= 10 }}
   - action: media_player.play_media
     target: {entity_id: media_player.spotify}
     data:
