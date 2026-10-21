@@ -36,9 +36,10 @@ blueprint:
       name: Playlists
       description: >-
         One per pad: `name`, `playlist` (a Spotify URI or link), and optionally
-        `effect` (a Launchpad effect) and `row` (1 is the top; the pad goes after
-        what is on that row already). For example:
-        `[{name: Chill, playlist: "spotify:playlist:…", effect: plasma, row: 2}]`
+        `effect` (a Launchpad effect), `row` (1 is the top; the pad goes after
+        what is on that row already) and `rgb` (the pad's colour, 0-255 each;
+        a rainbow otherwise). For example:
+        `[{name: Chill, playlist: "spotify:playlist:…", effect: plasma, row: 2, rgb: [255, 0, 128]}]`
       default: []
       selector:
         object: {}
@@ -93,10 +94,11 @@ actions:
                 {% set items = namespace(all=[]) %}
                 {% for entity in targets %}
                   {% set items.all = items.all + [{
-                    'name': state_attr(entity, 'friendly_name') or entity, 'row': 0}] %}
+                    'name': state_attr(entity, 'friendly_name') or entity, 'row': 0, 'rgb': none}] %}
                 {% endfor %}
                 {% for p in playlists %}
-                  {% set items.all = items.all + [{'name': p.name, 'row': p.row | default(0) | int}] %}
+                  {% set items.all = items.all + [{
+                    'name': p.name, 'row': p.row | default(0) | int, 'rgb': p.rgb | default(none)}] %}
                 {% endfor %}
                 {% for item in items.all %}
                   {% if item.row %}{% set ns.y = item.row - 1 %}{% endif %}
@@ -111,7 +113,7 @@ actions:
                     {% set ns.list = ns.list + [{
                       'pad': [ns.rows[y], y],
                       'name': item.name,
-                      'rgb': palette[ns.list | length % 8],
+                      'rgb': item.rgb or palette[ns.list | length % 8],
                     }] %}
                     {% set ns.rows = ns.rows[:y] + [ns.rows[y] + 1] + ns.rows[y + 1:] %}
                     {% set ns.y = y %}
