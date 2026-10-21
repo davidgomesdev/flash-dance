@@ -130,7 +130,7 @@ automations, and make an automation from it. It takes:
   - {name: Rock, playlist: "spotify:playlist:37i9dQZF1DWXRqgorJj26U", effect: spectrum, row: 4}
   ```
 
-Pads without an `rgb` are coloured in a rainbow, in order. A scene sets how things look; a script
+A playlist without an `rgb` is white; scenes and scripts are coloured in a rainbow, in order. A scene sets how things look; a script
 runs steps, which is what playing music needs. The party script, with the
 [Spotify](https://www.home-assistant.io/integrations/spotify/) integration
 (Premium only, and the speaker must already be one Spotify knows):
