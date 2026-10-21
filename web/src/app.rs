@@ -81,6 +81,11 @@ pub async fn list_scenes() -> Result<Vec<SceneInfo>, ServerFnError> {
 }
 
 #[server]
+pub async fn press_scene(scene: String, source: String) -> Result<Status, ServerFnError> {
+    crate::runner::press_scene(&scene, Some(source.as_str())).map_err(ServerFnError::new)
+}
+
+#[server]
 pub async fn start_effect(effect: String, source: String) -> Result<Status, ServerFnError> {
     crate::runner::start(&effect, Some(source.as_str())).map_err(ServerFnError::new)
 }
@@ -144,13 +149,23 @@ fn Console() -> impl IntoView {
         let (effect, source) = (effect.clone(), source.get_untracked());
         async move { start_effect(effect, source).await }
     });
+    let press = Action::new(move |scene: &String| {
+        let (scene, source) = (scene.clone(), source.get_untracked());
+        async move { press_scene(scene, source).await }
+    });
     let stop = Action::new(|(): &()| async { stop_effect().await });
+    // Which of the device's two modes the page shows, as User and Session do there.
+    let (on_scenes, set_on_scenes) = signal(false);
 
     // The effect can also stop itself — Stop/Solo/Mute on the device, or a crash
     // because nothing is plugged in — so the page asks rather than assumes.
     Effect::new(move |_| {
-        let (started, stopped) = (start.version().get(), stop.version().get());
-        let _ = (started, stopped);
+        let versions = (
+            start.version().get(),
+            press.version().get(),
+            stop.version().get(),
+        );
+        let _ = versions;
         status.refetch();
     });
     Effect::new(move |_| {
@@ -176,7 +191,7 @@ fn Console() -> impl IntoView {
         <main>
             <header>
                 <h1>"flash" <em>"dance"</em></h1>
-                <p class="tagline">"Launchpad Mini MK3 — pick an effect."</p>
+                <p class="tagline">"Launchpad Mini MK3 — pick an effect or a scene."</p>
             </header>
 
             <StatusBar status=status stop=stop />
@@ -217,11 +232,19 @@ fn Console() -> impl IntoView {
                 </p>
             </section>
 
-            <section class="group">
-                <h2>"scenes"</h2>
+            <nav class="modes">
+                <button class:on=move || !on_scenes.get() on:click=move |_| set_on_scenes.set(false)>
+                    "Effects" <small>"User button"</small>
+                </button>
+                <button class:on=move || on_scenes.get() on:click=move |_| set_on_scenes.set(true)>
+                    "Scenes" <small>"Session button"</small>
+                </button>
+            </nav>
+
+            <Show when=move || on_scenes.get()>
                 <p class="blurb">
-                    "Home Assistant's, on the device's " <strong>"Session"</strong>
-                    " button. Pressing one stops the effect."
+                    "Home Assistant's: pressing one stops the effect and tells Home "
+                    "Assistant, which does the rest."
                 </p>
                 // A Transition for the same reason as the effects below.
                 <Transition fallback=|| ()>
@@ -245,15 +268,22 @@ fn Console() -> impl IntoView {
                                         .map(|s| {
                                             let [r, g, b] = s.rgb;
                                             let name = s.name.clone();
+                                            let mine = name.clone();
                                             let current = move || {
-                                                scene().as_deref() == Some(name.as_str())
+                                                scene().as_deref() == Some(mine.as_str())
                                             };
                                             view! {
                                                 <li style=format!("--rgb: rgb({r} {g} {b})")>
-                                                    <div class="card scene" class:running=current>
+                                                    <button
+                                                        class="card scene"
+                                                        class:running=current
+                                                        on:click=move |_| {
+                                                            press.dispatch(name.clone());
+                                                        }
+                                                    >
                                                         <span class="swatch"></span>
                                                         <span class="name">{s.name}</span>
-                                                    </div>
+                                                    </button>
                                                 </li>
                                             }
                                         })
@@ -263,8 +293,9 @@ fn Console() -> impl IntoView {
                         )
                     }}
                 </Transition>
-            </section>
+            </Show>
 
+            <Show when=move || !on_scenes.get()>
             // A Transition, not a Suspense: every card reads the status the page
             // polls, and a Suspense falls back to this placeholder on *every* reload
             // of what it reads — which tore down and rebuilt the whole grid once a
@@ -308,6 +339,7 @@ fn Console() -> impl IntoView {
                     }
                 })}
             </Transition>
+            </Show>
         </main>
     }
 }

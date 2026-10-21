@@ -683,10 +683,28 @@ pub struct Scene {
     pub rgb: [u8; 3],
 }
 
-/// Session's mode, which [`run`] and [`panel`] both have: the scenes on the grid,
-/// read from `list` every frame so a new list shows at once.
-struct Scenes<'a> {
-    list: &'a Mutex<Vec<Scene>>,
+/// What Session shows, shared with whoever sets it and read every frame, so a new
+/// list shows at once.
+#[derive(Debug, Default)]
+pub struct Scenes {
+    pub list: Vec<Scene>,
+    /// A scene pressed somewhere else, the website most likely, by name. The
+    /// session takes it next frame and treats it as a press on its pad.
+    pub pressed: Option<String>,
+}
+
+impl Scenes {
+    pub const fn new() -> Self {
+        Scenes {
+            list: Vec::new(),
+            pressed: None,
+        }
+    }
+}
+
+/// Session's mode, which [`run`] and [`panel`] both have: the scenes on the grid.
+struct SceneMode<'a> {
+    scenes: &'a Mutex<Scenes>,
     on: bool,
     /// The scene pressed last, and when; it pulses for [`GLOW`] seconds.
     glow: Option<(Pad, f32)>,
@@ -694,10 +712,10 @@ struct Scenes<'a> {
     drawn: Option<(Vec<Scene>, Option<Pad>)>,
 }
 
-impl<'a> Scenes<'a> {
-    fn new(list: &'a Mutex<Vec<Scene>>) -> Self {
-        Scenes {
-            list,
+impl<'a> SceneMode<'a> {
+    fn new(scenes: &'a Mutex<Scenes>) -> Self {
+        SceneMode {
+            scenes,
             on: false,
             glow: None,
             drawn: None,
@@ -709,13 +727,35 @@ impl<'a> Scenes<'a> {
         self.drawn = None;
     }
 
+    fn lock(&self) -> std::sync::MutexGuard<'a, Scenes> {
+        self.scenes.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// The scene under `button`, if any, which starts it glowing.
     fn press(&mut self, button: Pad, now: f32) -> Option<String> {
         let (x, y) = button.to_xy()?;
-        let list = self.list.lock().unwrap_or_else(|p| p.into_inner());
-        let scene = list.iter().find(|s| (s.x, s.y) == (x, y))?;
+        let name = self
+            .lock()
+            .list
+            .iter()
+            .find(|s| (s.x, s.y) == (x, y))?
+            .name
+            .clone();
         self.glow = Some((button, now));
-        Some(scene.name.clone())
+        Some(name)
+    }
+
+    /// A scene pressed somewhere else, if it is one: it glows like a press on its
+    /// pad, and the scenes come up to show it.
+    fn remote(&mut self, now: f32) -> Option<String> {
+        let mut scenes = self.lock();
+        let name = scenes.pressed.take()?;
+        let scene = scenes.list.iter().find(|s| s.name == name)?;
+        let button = Pad::xy(scene.x, scene.y);
+        drop(scenes);
+        self.glow = Some((button, now));
+        self.show();
+        Some(name)
     }
 
     fn draw(&mut self, pad: &mut Launchpad, now: f32) -> Result<()> {
@@ -723,7 +763,7 @@ impl<'a> Scenes<'a> {
             self.glow = None;
         }
         let glowing = self.glow.map(|(p, _)| p);
-        let list = self.list.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let list = self.lock().list.clone();
         if self
             .drawn
             .as_ref()
@@ -766,7 +806,7 @@ impl<'a> Scenes<'a> {
 pub fn run(
     start: Effect,
     source: Option<&str>,
-    scenes: &Mutex<Vec<Scene>>,
+    scenes: &Mutex<Scenes>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -777,7 +817,7 @@ pub fn run(
     // `None` once a scene is pressed: the scene stops the effect.
     let mut current = Some(EFFECTS.iter().position(|e| *e == start).unwrap_or(0));
     let mut picking = false;
-    let mut scenes = Scenes::new(scenes);
+    let mut scenes = SceneMode::new(scenes);
     // Grid pads pressed in the picker or among the scenes, so their releases stay
     // unreported too.
     let mut picked: Vec<Pad> = Vec::new();
@@ -803,6 +843,13 @@ pub fn run(
         wall = now;
         virtual_time += dt;
 
+        if let Some(name) = scenes.remote(now) {
+            current = None;
+            picking = false;
+            draw_speed(&mut pad, level)?;
+            println!("scene {name}");
+            report(Report::Scene(name));
+        }
         for event in &queue {
             match *event {
                 Event::Press(button, _) if (picking || scenes.on) && button.to_xy().is_some() => {
@@ -912,7 +959,7 @@ pub type Picture = [[[u8; 3]; 8]; 8];
 /// `stop`, returning normally for the same reason [`run`] does.
 pub fn panel(
     picture: &Mutex<Picture>,
-    scenes: &Mutex<Vec<Scene>>,
+    scenes: &Mutex<Scenes>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -920,7 +967,7 @@ pub fn panel(
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
     let mut shown = None;
-    let mut scenes = Scenes::new(scenes);
+    let mut scenes = SceneMode::new(scenes);
     // False once a scene is pressed, which stops the panel like it stops an effect.
     let mut painting = true;
     let mut picked: Vec<Pad> = Vec::new();
@@ -933,6 +980,10 @@ pub fn panel(
         let now = clock.tick(&events, &mut queue);
         if stop.load(Ordering::Relaxed) {
             break 'running;
+        }
+        if let Some(name) = scenes.remote(now) {
+            painting = false;
+            report(Report::Scene(name));
         }
         for event in &queue {
             match *event {
