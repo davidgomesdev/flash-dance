@@ -11,15 +11,11 @@ use std::thread::JoinHandle;
 use flash_dance_effects::{EFFECTS, Picture, Report, Scene};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::app::{EffectInfo, SourceInfo, Status};
+use crate::app::{EffectInfo, SceneInfo, SourceInfo, Status};
 
 /// The session that is not an effect: the grid as a panel, showing [`PICTURE`].
 /// Started by name like any effect, which no effect name collides with.
 pub const PANEL: &str = "panel";
-
-/// What a session is showing once a scene was pressed: no effect. Not a name to
-/// start; no effect name collides with it either.
-pub const SCENES: &str = "scenes";
 
 /// What the panel shows. Painted from outside (Home Assistant, over MQTT) whether
 /// or not the panel is running, so switching to it shows the latest picture at once.
@@ -36,9 +32,10 @@ static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
 struct Running {
-    /// What is on the grid now: the panel, or the effect last picked — on the
-    /// device's own picker too, which is why the session reports it.
-    showing: Arc<Mutex<&'static str>>,
+    /// What is on the grid now, as [`Status::Running`] or [`Status::Scene`]: the
+    /// panel, the effect last picked — on the device's own picker too, which is why
+    /// the session reports it — or the scene last pressed.
+    showing: Arc<Mutex<Status>>,
     stop: Arc<AtomicBool>,
     /// The error is a `String` because the library's is not `Send`.
     thread: JoinHandle<Result<(), String>>,
@@ -78,6 +75,17 @@ pub fn listen() -> UnboundedReceiver<Report> {
     let (tx, rx) = unbounded_channel();
     *lock(&LISTENER) = Some(tx);
     rx
+}
+
+/// The scenes Session shows, in the order Home Assistant listed them.
+pub fn scenes() -> Vec<SceneInfo> {
+    lock(&SCENE_LIST)
+        .iter()
+        .map(|scene| SceneInfo {
+            name: scene.name.clone(),
+            rgb: scene.rgb,
+        })
+        .collect()
 }
 
 /// Every effect, in picker order.
@@ -124,13 +132,15 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     halt(&mut running);
 
     let stop = Arc::new(AtomicBool::new(false));
-    let showing = Arc::new(Mutex::new(effect.map_or(PANEL, |e| e.name())));
+    let showing = Arc::new(Mutex::new(Status::Running(
+        effect.map_or(PANEL, |e| e.name()).to_string(),
+    )));
     let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
     let report = move |report| match report {
-        Report::Showing(effect) => *lock(&shown) = effect.name(),
+        Report::Showing(effect) => *lock(&shown) = Status::Running(effect.name().to_string()),
         heard => {
-            if matches!(heard, Report::Scene(_)) {
-                *lock(&shown) = SCENES;
+            if let Report::Scene(name) = &heard {
+                *lock(&shown) = Status::Scene(name.clone());
             }
             // Nobody listening, or the listener gone, is not the session's problem.
             if let Some(listener) = lock(&LISTENER).as_ref() {
@@ -184,10 +194,15 @@ fn state(running: &mut Option<Running>) -> Status {
     let Some(current) = running.as_ref() else {
         return Status::Idle;
     };
-    let effect = lock(&current.showing).to_string();
+    let showing = lock(&current.showing).clone();
     if !current.thread.is_finished() {
-        return Status::Running(effect);
+        return showing;
     }
+    let effect = match showing {
+        Status::Scene(name) => format!("scene {name}"),
+        Status::Running(effect) => effect,
+        Status::Idle | Status::Failed { .. } => unreachable!("never stored as showing"),
+    };
     let ended = running.take().expect("checked above");
     match ended.thread.join() {
         Ok(Ok(())) => Status::Idle,

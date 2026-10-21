@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use crate::app::Status;
-use crate::runner::{self, PANEL, SCENES};
+use crate::runner::{self, PANEL};
 
 const AVAILABILITY: &str = "flash-dance/availability";
 const LIGHT_SET: &str = "flash-dance/light/set";
@@ -200,9 +200,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 // it waits for whoever is starting or stopping a session.
                 let status = tokio::task::spawn_blocking(runner::status);
                 let status = status.await.unwrap_or_default();
-                if let Status::Running(effect) = &status
-                    && effect != SCENES
-                {
+                if let Status::Running(effect) = &status {
                     last = effect.clone();
                 }
                 // Seen once: `status` collects an ended session, then reports idle.
@@ -365,7 +363,7 @@ fn press(event: Event) -> Option<Value> {
 fn light_state(status: &Status) -> Value {
     match status {
         // `null`, not left out: HA keeps the last effect when the key is missing.
-        Status::Running(effect) if effect == SCENES => {
+        Status::Scene(_) => {
             json!({"state": "ON", "effect": null, "color_mode": "onoff"})
         }
         Status::Running(effect) => json!({"state": "ON", "effect": effect, "color_mode": "onoff"}),
@@ -553,7 +551,7 @@ mod tests {
     #[test]
     fn a_scene_turns_the_effect_off_explicitly() {
         assert_eq!(
-            light_state(&Status::Running(SCENES.into())),
+            light_state(&Status::Scene("Party".into())),
             json!({"state": "ON", "effect": null, "color_mode": "onoff"})
         );
     }
