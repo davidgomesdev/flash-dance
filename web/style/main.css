@@ -240,6 +240,27 @@ header h1 em {
   animation: breathe 1.6s ease-in-out infinite;
 }
 
+/* A scene's colour is Home Assistant's RGB, not a hue, and the card is not a
+   button: scenes are pressed on the device. */
+.card.scene {
+  padding-right: 0.85rem;
+  cursor: default;
+}
+
+.card.scene .swatch {
+  background: var(--rgb);
+  box-shadow: 0 0 1.2rem -0.2rem var(--rgb);
+}
+
+.cards li:hover .card.scene,
+.card.scene.running {
+  border-color: var(--rgb);
+}
+
+.card.scene.running {
+  background: color-mix(in srgb, var(--rgb) 14%, var(--raised));
+}
+
 /* The `?` and what it opens --------------------------------------------- */
 
 .help {

@@ -42,12 +42,21 @@ impl SourceInfo {
     }
 }
 
+/// A scene Home Assistant listed for the device's Session button.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SceneInfo {
+    pub name: String,
+    pub rgb: [u8; 3],
+}
+
 /// What the server's effect session is doing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Status {
     #[default]
     Idle,
     Running(String),
+    /// A scene was pressed on the device, which stopped the effect.
+    Scene(String),
     /// The session ended with an error — no device plugged in, most often — and
     /// this is what it was.
     Failed {
@@ -64,6 +73,11 @@ pub async fn list_effects() -> Result<Vec<EffectInfo>, ServerFnError> {
 #[server]
 pub async fn list_sources() -> Result<Vec<SourceInfo>, ServerFnError> {
     Ok(crate::runner::sources())
+}
+
+#[server]
+pub async fn list_scenes() -> Result<Vec<SceneInfo>, ServerFnError> {
+    Ok(crate::runner::scenes())
 }
 
 #[server]
@@ -124,6 +138,8 @@ fn Console() -> impl IntoView {
         || (),
         |_| async { current_status().await.unwrap_or_default() },
     );
+    // Polled with the status: Home Assistant can change the list at any time.
+    let scenes = Resource::new(|| (), |_| async { list_scenes().await.unwrap_or_default() });
     let start = Action::new(move |effect: &String| {
         let (effect, source) = (effect.clone(), source.get_untracked());
         async move { start_effect(effect, source).await }
@@ -139,13 +155,20 @@ fn Console() -> impl IntoView {
     });
     Effect::new(move |_| {
         set_interval(
-            move || status.refetch(),
+            move || {
+                status.refetch();
+                scenes.refetch();
+            },
             std::time::Duration::from_millis(1500),
         );
     });
 
     let running = move || match status.get() {
         Some(Status::Running(effect)) => Some(effect),
+        _ => None,
+    };
+    let scene = move || match status.get() {
+        Some(Status::Scene(name)) => Some(name),
         _ => None,
     };
 
@@ -192,6 +215,54 @@ fn Console() -> impl IntoView {
                     <strong>"Stop/Solo/Mute"</strong>
                     " quits."
                 </p>
+            </section>
+
+            <section class="group">
+                <h2>"scenes"</h2>
+                <p class="blurb">
+                    "Home Assistant's, on the device's " <strong>"Session"</strong>
+                    " button. Pressing one stops the effect."
+                </p>
+                // A Transition for the same reason as the effects below.
+                <Transition fallback=|| ()>
+                    {move || {
+                        let listed = scenes.get().unwrap_or_default();
+                        if listed.is_empty() {
+                            return Either::Left(
+                                view! {
+                                    <p class="empty">
+                                        "None yet: Home Assistant lists them on "
+                                        <code>"flash-dance/scenes/set"</code> "."
+                                    </p>
+                                },
+                            );
+                        }
+                        Either::Right(
+                            view! {
+                                <ul class="cards">
+                                    {listed
+                                        .into_iter()
+                                        .map(|s| {
+                                            let [r, g, b] = s.rgb;
+                                            let name = s.name.clone();
+                                            let current = move || {
+                                                scene().as_deref() == Some(name.as_str())
+                                            };
+                                            view! {
+                                                <li style=format!("--rgb: rgb({r} {g} {b})")>
+                                                    <div class="card scene" class:running=current>
+                                                        <span class="swatch"></span>
+                                                        <span class="name">{s.name}</span>
+                                                    </div>
+                                                </li>
+                                            }
+                                        })
+                                        .collect_view()}
+                                </ul>
+                            },
+                        )
+                    }}
+                </Transition>
             </section>
 
             // A Transition, not a Suspense: every card reads the status the page
@@ -308,10 +379,11 @@ fn StatusBar(
             <Transition fallback=|| view! { <span class="dot idle"></span> }>
                 {move || {
                     let status = status.get().unwrap_or_default();
-                    let running = matches!(status, Status::Running(_));
+                    let running = matches!(status, Status::Running(_) | Status::Scene(_));
                     let (class, text) = match &status {
                         Status::Idle => ("idle", "Nothing running.".to_string()),
                         Status::Running(effect) => ("live", format!("Running {effect}.")),
+                        Status::Scene(name) => ("live", format!("Scene {name}.")),
                         Status::Failed { effect, error } => {
                             ("failed", format!("{effect} stopped: {error}"))
                         }
