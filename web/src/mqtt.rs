@@ -4,7 +4,14 @@
 //!   off stops the session;
 //! - a **select** for the audio source the sound effects listen to;
 //! - an **event** entity, `event.launchpad_pad`, firing on every grid press and
-//!   release with its `x`, `y` and velocity.
+//!   release with its `x`, `y` and velocity;
+//! - an **event** entity, `event.launchpad_scene`, firing with a scene's name as its
+//!   event type when Session's scene pad is pressed.
+//!
+//! HA lists the scenes, retained, on [`SCENES_SET`]: `[{"pad": [x, y], "name": …,
+//! "rgb": [r, g, b]}]`. Their names are the scene entity's event types, so a new
+//! list re-announces the device. A scene pressed stops the effect, and the light
+//! says so: on, with a `null` effect.
 //!
 //! HA colours the panel by publishing `{"pad": [x, y], "rgb": [r, g, b]}` (or a
 //! list of them) to [`GRID`]; the Pi keeps no map of entities to pads, HA's
@@ -19,12 +26,13 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use flash_dance::Event;
+use flash_dance_effects::{Report, Scene};
 use rumqttc::{AsyncClient, Event as Mqtt, LastWill, MqttOptions, Outgoing, Packet, QoS};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use crate::app::Status;
-use crate::runner::{self, PANEL};
+use crate::runner::{self, PANEL, SCENES};
 
 const AVAILABILITY: &str = "flash-dance/availability";
 const LIGHT_SET: &str = "flash-dance/light/set";
@@ -33,6 +41,8 @@ const SOURCE_SET: &str = "flash-dance/source/set";
 const SOURCE_STATE: &str = "flash-dance/source/state";
 const PAD: &str = "flash-dance/pad";
 const GRID: &str = "flash-dance/grid/set";
+const SCENES_SET: &str = "flash-dance/scenes/set";
+const SCENE: &str = "flash-dance/scene";
 const DISCOVERY: &str = "homeassistant/device/flash_dance/config";
 /// HA's birth message: `online` here means it has (re)started and wants discovery again.
 const HA_STATUS: &str = "homeassistant/status";
@@ -88,6 +98,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
     let mut rescan = tokio::time::interval(Duration::from_secs(30));
     let mut sources: Vec<String> = Vec::new();
     let mut source = String::new();
+    let mut scenes: Vec<String> = Vec::new();
     // The effect "on" comes back to when HA sends no effect with it: whatever was
     // showing last, picked from HA, the website or the device's own picker.
     let mut last = runner::effects()[0].name.clone();
@@ -101,10 +112,10 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     println!("mqtt: connected");
                     // A fresh session every time, so subscriptions do not survive a
                     // reconnect and are made again here.
-                    for topic in [LIGHT_SET, SOURCE_SET, GRID, HA_STATUS] {
+                    for topic in [LIGHT_SET, SOURCE_SET, GRID, SCENES_SET, HA_STATUS] {
                         let _ = client.try_subscribe(topic, QoS::AtLeastOnce);
                     }
-                    announce(&client, &sources, &source);
+                    announce(&client, &sources, &source, &scenes);
                     published = None;
                 }
                 Ok(Mqtt::Incoming(Packet::Publish(message))) => {
@@ -135,8 +146,16 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                             publish(&client, SOURCE_STATE, true, source.clone());
                         }
                         Some(Command::Paint(pads)) => runner::paint(&pads),
+                        Some(Command::Scenes(list)) => {
+                            let names = event_types(&list);
+                            runner::set_scenes(list);
+                            if names != scenes {
+                                scenes = names;
+                                announce(&client, &sources, &source, &scenes);
+                            }
+                        }
                         Some(Command::Announce) => {
-                            announce(&client, &sources, &source);
+                            announce(&client, &sources, &source, &scenes);
                             published = None;
                         }
                         Some(Command::Source(_)) | None => {
@@ -151,11 +170,17 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             },
-            Some(event) = presses.recv() => {
-                if let Some(payload) = press(event) {
-                    publish(&client, PAD, false, payload.to_string());
+            Some(heard) = presses.recv() => match heard {
+                Report::Event(event) => {
+                    if let Some(payload) = press(event) {
+                        publish(&client, PAD, false, payload.to_string());
+                    }
                 }
-            }
+                Report::Scene(name) => {
+                    publish(&client, SCENE, false, json!({"event_type": name}).to_string());
+                }
+                Report::Showing(_) => {}
+            },
             _ = rescan.tick() => {
                 let found = tokio::task::spawn_blocking(|| {
                     runner::sources().into_iter().map(|s| s.name).collect::<Vec<_>>()
@@ -166,7 +191,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     if !sources.contains(&source) {
                         source = sources.first().cloned().unwrap_or_default();
                     }
-                    announce(&client, &sources, &source);
+                    announce(&client, &sources, &source, &scenes);
                 }
             }
             _ = tick.tick() => {
@@ -175,7 +200,9 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 // it waits for whoever is starting or stopping a session.
                 let status = tokio::task::spawn_blocking(runner::status);
                 let status = status.await.unwrap_or_default();
-                if let Status::Running(effect) = &status {
+                if let Status::Running(effect) = &status
+                    && effect != SCENES
+                {
                     last = effect.clone();
                 }
                 // Seen once: `status` collects an ended session, then reports idle.
@@ -215,13 +242,13 @@ fn publish(client: &AsyncClient, topic: &str, retain: bool, payload: String) {
 }
 
 /// Everything HA needs to (re)build the device, and the Pi's cue for it to repaint.
-fn announce(client: &AsyncClient, sources: &[String], source: &str) {
+fn announce(client: &AsyncClient, sources: &[String], source: &str, scenes: &[String]) {
     let names: Vec<String> = runner::effects().into_iter().map(|e| e.name).collect();
     publish(
         client,
         DISCOVERY,
         true,
-        discovery(&names, sources).to_string(),
+        discovery(&names, sources, scenes).to_string(),
     );
     publish(client, AVAILABILITY, true, "online".to_string());
     if !source.is_empty() {
@@ -236,6 +263,7 @@ enum Command {
     Off,
     Source(String),
     Paint(Vec<(usize, usize, [u8; 3])>),
+    Scenes(Vec<Scene>),
     /// HA restarted and has forgotten the device.
     Announce,
 }
@@ -263,6 +291,16 @@ fn command(topic: &str, payload: &[u8]) -> Option<Command> {
                 .collect::<Option<_>>()
                 .map(Command::Paint)
         }
+        SCENES_SET => {
+            let value: Value = serde_json::from_slice(payload).ok()?;
+            // Like the grid: one bad scene spoils the list.
+            value
+                .as_array()?
+                .iter()
+                .map(scene)
+                .collect::<Option<_>>()
+                .map(Command::Scenes)
+        }
         HA_STATUS => (payload == b"online").then_some(Command::Announce),
         _ => None,
     }
@@ -283,6 +321,35 @@ fn pad_colour(value: &Value) -> Option<(usize, usize, [u8; 3])> {
     ))
 }
 
+fn scene(value: &Value) -> Option<Scene> {
+    let byte = |v: &Value| v.as_u64().filter(|&c| c <= 255).map(|c| c as u8);
+    let on_grid = |v: &Value| v.as_u64().filter(|&c| c < 8).map(|c| c as u8);
+    let [x, y] = value["pad"].as_array()?.as_slice() else {
+        return None;
+    };
+    let [r, g, b] = value["rgb"].as_array()?.as_slice() else {
+        return None;
+    };
+    let name = value["name"].as_str().filter(|n| !n.is_empty())?;
+    Some(Scene {
+        x: on_grid(x)?,
+        y: on_grid(y)?,
+        name: name.to_string(),
+        rgb: [byte(r)?, byte(g)?, byte(b)?],
+    })
+}
+
+/// The scene entity's event types: each name once, in the order HA listed them.
+fn event_types(scenes: &[Scene]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for scene in scenes {
+        if !names.contains(&scene.name) {
+            names.push(scene.name.clone());
+        }
+    }
+    names
+}
+
 /// A grid press or release as HA's event entity wants it. The edge buttons are the
 /// session's own controls, so they stay on the device.
 fn press(event: Event) -> Option<Value> {
@@ -297,14 +364,19 @@ fn press(event: Event) -> Option<Value> {
 
 fn light_state(status: &Status) -> Value {
     match status {
+        // `null`, not left out: HA keeps the last effect when the key is missing.
+        Status::Running(effect) if effect == SCENES => {
+            json!({"state": "ON", "effect": null, "color_mode": "onoff"})
+        }
         Status::Running(effect) => json!({"state": "ON", "effect": effect, "color_mode": "onoff"}),
         Status::Idle | Status::Failed { .. } => json!({"state": "OFF"}),
     }
 }
 
-/// HA's device discovery: one message for the device and all three entities.
-/// `sources` empty (no sound server) leaves the select out.
-fn discovery(effects: &[String], sources: &[String]) -> Value {
+/// HA's device discovery: one message for the device and all its entities.
+/// `sources` empty (no sound server) leaves the select out, `scenes` empty the
+/// scene entity.
+fn discovery(effects: &[String], sources: &[String], scenes: &[String]) -> Value {
     let mut effect_list: Vec<&str> = effects.iter().map(String::as_str).collect();
     effect_list.push(PANEL);
     let mut components = json!({
@@ -335,6 +407,15 @@ fn discovery(effects: &[String], sources: &[String]) -> Value {
             "command_topic": SOURCE_SET,
             "state_topic": SOURCE_STATE,
             "options": sources,
+        });
+    }
+    if !scenes.is_empty() {
+        components["scene"] = json!({
+            "platform": "event",
+            "unique_id": "flash_dance_scene",
+            "name": "Scene",
+            "state_topic": SCENE,
+            "event_types": scenes,
         });
     }
     json!({
@@ -421,7 +502,7 @@ mod tests {
     #[test]
     fn discovery_offers_every_effect_and_the_panel() {
         let effects: Vec<String> = runner::effects().into_iter().map(|e| e.name).collect();
-        let config = discovery(&effects, &[]);
+        let config = discovery(&effects, &[], &[]);
         let list = config["components"]["light"]["effect_list"]
             .as_array()
             .unwrap();
@@ -429,6 +510,51 @@ mod tests {
         assert_eq!(list.last().unwrap(), PANEL);
         assert!(effects.iter().all(|e| e != PANEL));
         assert!(config["components"].get("source").is_none());
-        assert!(discovery(&effects, &["mic".into()])["components"]["source"].is_object());
+        assert!(config["components"].get("scene").is_none());
+        let full = discovery(&effects, &["mic".into()], &["Party".into()]);
+        assert!(full["components"]["source"].is_object());
+        assert_eq!(full["components"]["scene"]["event_types"], json!(["Party"]));
+    }
+
+    #[test]
+    fn scenes_need_a_grid_pad_a_name_and_a_colour() {
+        let party = Scene {
+            x: 1,
+            y: 7,
+            name: "Party".into(),
+            rgb: [255, 0, 128],
+        };
+        assert_eq!(
+            command(
+                SCENES_SET,
+                br#"[{"pad":[1,7],"name":"Party","rgb":[255,0,128]}]"#
+            ),
+            Some(Command::Scenes(vec![party.clone()]))
+        );
+        assert_eq!(command(SCENES_SET, b"[]"), Some(Command::Scenes(vec![])));
+        assert_eq!(
+            command(SCENES_SET, br#"[{"pad":[8,0],"name":"x","rgb":[0,0,0]}]"#),
+            None
+        );
+        assert_eq!(
+            command(SCENES_SET, br#"[{"pad":[0,0],"name":"","rgb":[0,0,0]}]"#),
+            None
+        );
+        assert_eq!(
+            command(SCENES_SET, br#"{"pad":[0,0],"name":"x","rgb":[0,0,0]}"#),
+            None
+        );
+        assert_eq!(
+            event_types(&[party.clone(), party]),
+            vec!["Party".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_scene_turns_the_effect_off_explicitly() {
+        assert_eq!(
+            light_state(&Status::Running(SCENES.into())),
+            json!({"state": "ON", "effect": null, "color_mode": "onoff"})
+        );
     }
 }

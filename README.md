@@ -95,12 +95,41 @@ off. Home Assistant gets one device, **Launchpad**, with:
 - **Audio source**, a select for what the sound effects listen to;
 - **Pad**, an event entity (`event.launchpad_pad`) firing `press` and `release`
   with the pad's `x`, `y` (from the top left) and the press velocity.
+- **Scene**, an event entity (`event.launchpad_scene`) whose event type is the
+  name of the scene pressed — there once Home Assistant has listed scenes.
 
 To paint the panel, publish `{"pad": [x, y], "rgb": [r, g, b]}`, or a list of
 them, to `flash-dance/grid/set` — from an automation, with `mqtt.publish`. The
 picture is kept while an effect runs, so switching to `panel` shows it at once.
 The bridge publishes `online` on `flash-dance/availability` each time it
 connects; trigger on that to repaint everything after a restart.
+
+### Scenes
+
+**Session** (top row, fifth button) swaps the grid for scene pads; **User** still
+opens the effect picker. Home Assistant lists the scenes by publishing, **retained**,
+to `flash-dance/scenes/set` (an empty list removes them):
+
+```json
+[{"pad": [0, 0], "name": "Party", "rgb": [255, 0, 128]}]
+```
+
+Pressing a scene stops the effect — the light stays on with no effect — pulses the
+pad for 5 s and fires `event.launchpad_scene` with the scene's name as the event
+type, so an automation can trigger on it and do anything, setting an effect on
+the light included:
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.launchpad_scene
+    attribute: event_type
+    to: Party
+actions:
+  - action: scene.turn_on
+    target:
+      entity_id: scene.party
+```
 
 ## Listening
 

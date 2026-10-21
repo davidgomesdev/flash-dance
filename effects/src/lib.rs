@@ -3,6 +3,9 @@
 //! the web server call it. Four of the effects listen to an audio source.
 //!
 //! - **User** (top row, rightmost) opens the picker; tap a lit pad to choose.
+//! - **Session** (top row, fifth) shows the [`Scene`]s someone else named; tap one
+//!   and the effect stops, the scene's pad pulsing for a few seconds. Session again
+//!   goes back to the effect, if one is still showing.
 //! - **Up / down** change brightness. No on-screen indicator: the whole grid gets
 //!   brighter or dimmer, which is the indicator.
 //! - **Left / right** change speed. The right column shows it, blue below 1x,
@@ -25,7 +28,10 @@ use flash_dance::{Clock, Event, Grid, Launchpad, Light, Pad, Result, Rng, hsv};
 use flash_dance_audio::{Audio, Sound};
 
 const MENU: Pad = Pad(98); // top row, rightmost, "User"
+const SESSION: Pad = Pad(95); // top row, fifth, "Session"
 const FPS: f64 = 30.0;
+/// Seconds a pressed scene pulses: long enough to see it took, short enough not to nag.
+const GLOW: f32 = 5.0;
 
 fn quit_button() -> Pad {
     Pad::right(7) // bottom of the right column, "Stop/Solo/Mute"
@@ -609,11 +615,11 @@ fn step(index: usize, by: i32, len: usize) -> Option<usize> {
 }
 
 /// The buttons that do something, in a dim white: noticeable, but not competing
-/// with the effect. The four arrows and the picker button; quit has its own colour.
+/// with the effect. The four arrows, scenes and the picker; quit has its own colour.
 fn controls() -> impl Iterator<Item = (Pad, Light)> {
     (0..4)
         .map(Pad::top)
-        .chain([MENU])
+        .chain([SESSION, MENU])
         .map(|b| (b, Light::Rgb(30, 30, 30)))
 }
 
@@ -639,12 +645,12 @@ fn draw_speed(pad: &mut Launchpad, level: usize) -> Result<()> {
 }
 
 /// One pad per effect in its signature colour, the current one pulsing white.
-fn draw_picker(pad: &mut Launchpad, current: usize) -> Result<()> {
+fn draw_picker(pad: &mut Launchpad, current: Option<usize>) -> Result<()> {
     pad.clear()?;
     pad.set_all(
         controls().chain(EFFECTS.iter().enumerate().map(|(i, effect)| {
             let target = Pad::xy((i % 8) as u8, (i / 8) as u8);
-            if i == current {
+            if Some(i) == current {
                 (target, Light::Pulse(3))
             } else {
                 let [r, g, b] = hsv(effect.hue(), 1.0, 1.0).map(|c| (c * 127.0) as u8);
@@ -655,20 +661,103 @@ fn draw_picker(pad: &mut Launchpad, current: usize) -> Result<()> {
 }
 
 /// What a session tells whoever started it, as it happens.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Report {
     /// The effect now showing: the one it started on, then each one picked.
     Showing(Effect),
+    /// A scene was pressed, by name. Nothing is showing from then until an effect
+    /// is picked.
+    Scene(String),
     /// Every button event, controls included, as the device sent it, except the
-    /// picker's: choosing an effect is not pressing a pad.
+    /// picker's and the scenes': choosing one is not pressing a pad.
     Event(Event),
 }
 
+/// A pad someone else names and colours, Home Assistant most likely, for
+/// Session to show. `x` from the left, `y` from the top, `rgb` ordinary 0..=255.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scene {
+    pub x: u8,
+    pub y: u8,
+    pub name: String,
+    pub rgb: [u8; 3],
+}
+
+/// Session's mode, which [`run`] and [`panel`] both have: the scenes on the grid,
+/// read from `list` every frame so a new list shows at once.
+struct Scenes<'a> {
+    list: &'a Mutex<Vec<Scene>>,
+    on: bool,
+    /// The scene pressed last, and when; it pulses for [`GLOW`] seconds.
+    glow: Option<(Pad, f32)>,
+    /// What is on the grid, so it is sent again only when the list or glow change.
+    drawn: Option<(Vec<Scene>, Option<Pad>)>,
+}
+
+impl<'a> Scenes<'a> {
+    fn new(list: &'a Mutex<Vec<Scene>>) -> Self {
+        Scenes {
+            list,
+            on: false,
+            glow: None,
+            drawn: None,
+        }
+    }
+
+    fn show(&mut self) {
+        self.on = true;
+        self.drawn = None;
+    }
+
+    /// The scene under `button`, if any, which starts it glowing.
+    fn press(&mut self, button: Pad, now: f32) -> Option<String> {
+        let (x, y) = button.to_xy()?;
+        let list = self.list.lock().unwrap_or_else(|p| p.into_inner());
+        let scene = list.iter().find(|s| (s.x, s.y) == (x, y))?;
+        self.glow = Some((button, now));
+        Some(scene.name.clone())
+    }
+
+    fn draw(&mut self, pad: &mut Launchpad, now: f32) -> Result<()> {
+        if self.glow.is_some_and(|(_, at)| now - at > GLOW) {
+            self.glow = None;
+        }
+        let glowing = self.glow.map(|(p, _)| p);
+        let list = self.list.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if self
+            .drawn
+            .as_ref()
+            .is_some_and(|(l, g)| *l == list && *g == glowing)
+        {
+            return Ok(());
+        }
+        let mut picture: Picture = [[[0; 3]; 8]; 8];
+        for scene in &list {
+            if let Some(rgb) = picture
+                .get_mut(scene.y as usize)
+                .and_then(|row| row.get_mut(scene.x as usize))
+            {
+                *rgb = scene.rgb;
+            }
+        }
+        pad.set_all(grid(&picture).lights().map(|(p, light)| {
+            if Some(p) == glowing {
+                (p, Light::Pulse(3))
+            } else {
+                (p, light)
+            }
+        }))?;
+        self.drawn = Some((list, glowing));
+        Ok(())
+    }
+}
+
 /// Runs a session on the device: `start` first, then whatever the picker chooses,
-/// with the arrows on speed and brightness, until Stop/Solo/Mute is pressed or
-/// `stop` is set. `source` is the audio source the sound effects listen to, by any
-/// part of its name; `None` is whatever the machine is playing. `report` hears
-/// what is showing and every button event, on the session's own thread.
+/// with the arrows on speed and brightness and Session on `scenes`, until
+/// Stop/Solo/Mute is pressed or `stop` is set. `source` is the audio source the
+/// sound effects listen to, by any part of its name; `None` is whatever the machine
+/// is playing. `report` hears what is showing, each scene pressed and every button
+/// event, on the session's own thread.
 ///
 /// Returns normally either way, so the `Launchpad`'s `Drop` gets to clear the
 /// LEDs, put the brightness back and leave programmer mode. That is why `stop` is
@@ -677,6 +766,7 @@ pub enum Report {
 pub fn run(
     start: Effect,
     source: Option<&str>,
+    scenes: &Mutex<Vec<Scene>>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -684,9 +774,12 @@ pub fn run(
     let mut app = App::new(source.map(String::from));
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
-    let mut current = EFFECTS.iter().position(|e| *e == start).unwrap_or(0);
+    // `None` once a scene is pressed: the scene stops the effect.
+    let mut current = Some(EFFECTS.iter().position(|e| *e == start).unwrap_or(0));
     let mut picking = false;
-    // Grid pads pressed in the picker, so their releases stay unreported too.
+    let mut scenes = Scenes::new(scenes);
+    // Grid pads pressed in the picker or among the scenes, so their releases stay
+    // unreported too.
     let mut picked: Vec<Pad> = Vec::new();
     let (mut wall, mut virtual_time) = (0.0f32, 0.0f32);
     // Global: both outlive a change of effect.
@@ -696,8 +789,8 @@ pub fn run(
     app.reset(&mut pad)?;
     pad.set_brightness(BRIGHTNESS[brightness])?;
     draw_speed(&mut pad, level)?;
-    println!("{}", EFFECTS[current].name());
-    report(Report::Showing(EFFECTS[current]));
+    println!("{}", start.name());
+    report(Report::Showing(start));
 
     'running: loop {
         let now = clock.tick(&events, &mut queue);
@@ -712,7 +805,7 @@ pub fn run(
 
         for event in &queue {
             match *event {
-                Event::Press(button, _) if picking && button.to_xy().is_some() => {
+                Event::Press(button, _) if (picking || scenes.on) && button.to_xy().is_some() => {
                     picked.push(button)
                 }
                 Event::Release(button) if picked.contains(&button) => {
@@ -749,29 +842,58 @@ pub fn run(
             }
             if button == MENU {
                 picking = !picking;
+                // Going to the effects lets go of the scene.
+                scenes.glow = None;
                 if picking {
+                    scenes.on = false;
                     draw_picker(&mut pad, current)?;
+                } else if current.is_some() {
+                    app.reset(&mut pad)?;
+                    draw_speed(&mut pad, level)?;
                 } else {
+                    // Nothing to go back to: the scenes are all there is.
+                    scenes.show();
+                    draw_speed(&mut pad, level)?;
+                }
+                continue;
+            }
+            if button == SESSION {
+                if !scenes.on {
+                    picking = false;
+                    scenes.show();
+                    draw_speed(&mut pad, level)?;
+                } else if current.is_some() {
+                    scenes.on = false;
                     app.reset(&mut pad)?;
                     draw_speed(&mut pad, level)?;
                 }
                 continue;
             }
+            if scenes.on
+                && let Some(name) = scenes.press(button, now)
+            {
+                current = None;
+                println!("scene {name}");
+                report(Report::Scene(name));
+                continue;
+            }
             if picking && let Some((x, y)) = button.to_xy() {
                 let i = (y * 8 + x) as usize;
                 if i < EFFECTS.len() {
-                    current = i;
+                    current = Some(i);
                     picking = false;
                     app.reset(&mut pad)?;
                     draw_speed(&mut pad, level)?;
-                    println!("{}", EFFECTS[current].name());
-                    report(Report::Showing(EFFECTS[current]));
+                    println!("{}", EFFECTS[i].name());
+                    report(Report::Showing(EFFECTS[i]));
                 }
             }
         }
 
-        if !picking {
-            app.render(&mut pad, EFFECTS[current], virtual_time, dt, &queue)?;
+        if scenes.on {
+            scenes.draw(&mut pad, now)?;
+        } else if !picking && let Some(i) = current {
+            app.render(&mut pad, EFFECTS[i], virtual_time, dt, &queue)?;
         }
     }
 
@@ -784,11 +906,13 @@ pub fn run(
 pub type Picture = [[[u8; 3]; 8]; 8];
 
 /// Runs a session that shows `picture` and nothing else: the grid as a panel that
-/// someone else paints, Home Assistant most likely. It redraws when the picture
-/// changes, reports every event like [`run`], and quits on Stop/Solo/Mute or `stop`,
-/// returning normally for the same reason [`run`] does.
+/// someone else paints, Home Assistant most likely. Session shows `scenes` instead,
+/// as in [`run`], and pressing one leaves the picture for good. It redraws when the
+/// picture changes, reports every event like [`run`], and quits on Stop/Solo/Mute or
+/// `stop`, returning normally for the same reason [`run`] does.
 pub fn panel(
     picture: &Mutex<Picture>,
+    scenes: &Mutex<Vec<Scene>>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -796,18 +920,53 @@ pub fn panel(
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
     let mut shown = None;
-    pad.set(quit_button(), Light::Solid(7))?;
+    let mut scenes = Scenes::new(scenes);
+    // False once a scene is pressed, which stops the panel like it stops an effect.
+    let mut painting = true;
+    let mut picked: Vec<Pad> = Vec::new();
+    pad.set_all([
+        (quit_button(), Light::Solid(7)),
+        (SESSION, Light::Rgb(30, 30, 30)),
+    ])?;
 
     'running: loop {
-        clock.tick(&events, &mut queue);
+        let now = clock.tick(&events, &mut queue);
         if stop.load(Ordering::Relaxed) {
             break 'running;
         }
         for event in &queue {
-            report(Report::Event(*event));
-            if matches!(*event, Event::Press(button, _) if button == quit_button()) {
+            match *event {
+                Event::Press(button, _) if scenes.on && button.to_xy().is_some() => {
+                    picked.push(button)
+                }
+                Event::Release(button) if picked.contains(&button) => {
+                    picked.retain(|&p| p != button)
+                }
+                _ => report(Report::Event(*event)),
+            }
+            let Event::Press(button, _) = *event else {
+                continue;
+            };
+            if button == quit_button() {
                 break 'running;
             }
+            if button == SESSION {
+                if !scenes.on {
+                    scenes.show();
+                } else if painting {
+                    scenes.on = false;
+                    shown = None;
+                }
+            } else if scenes.on
+                && let Some(name) = scenes.press(button, now)
+            {
+                painting = false;
+                report(Report::Scene(name));
+            }
+        }
+        if scenes.on {
+            scenes.draw(&mut pad, now)?;
+            continue;
         }
         let now = *picture
             .lock()
