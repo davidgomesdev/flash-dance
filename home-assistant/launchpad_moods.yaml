@@ -26,7 +26,8 @@ blueprint:
       name: Mood script
       description: >-
         Run for a playlist pad, with the variables `playlist` and `effect` (empty
-        when the pad has none).
+        when the pad has none): a script made from the Launchpad mood script
+        blueprint, or your own.
       default: ""
       selector:
         entity:

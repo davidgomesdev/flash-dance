@@ -114,57 +114,27 @@ device (starting a session first if none is running). Pressing a mood stops the
 effect — the light stays on with no effect — pulses its pad for 5 s and fires
 `event.launchpad_mood` with the mood's name as the event type.
 
-**The easy way:** the [Launchpad moods](home-assistant/launchpad_moods.yaml)
-blueprint. Copy it to `config/blueprints/automation/flash-dance/`, reload
-automations, and make an automation from it. It takes:
+**The easy way:** two blueprints, imported into Home Assistant from their links.
 
-- **Scenes and scripts**, Home Assistant's own, picked from a list: each gets a pad, from the top left,
-  named after the entity. Pressed, it runs.
-- **Playlists**, added one at a time in a form, each running one **mood script**
-  with its playlist and effect: a name, a Spotify playlist (URI or link), and
-  optionally a Launchpad effect from a list, a row (1 is the top; the pad goes
-  after what is on that row already, or after the pad before it without one) and
-  a colour from a picker (white without one).
+1. [Launchpad mood script](home-assistant/launchpad_mood_script.yaml)
+   ([import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidgomesdev%2Fflash-dance%2Fblob%2Fmain%2Fhome-assistant%2Flaunchpad_mood_script.yaml)): what a playlist
+   mood runs. Make a script from it, picking the Spotify player and speaker; it
+   selects the speaker, plays the playlist and sets the Launchpad effect. Needs
+   the [Spotify](https://www.home-assistant.io/integrations/spotify/) integration
+   with Premium, and a speaker Spotify already knows.
+2. [Launchpad moods](home-assistant/launchpad_moods.yaml)
+   ([import](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdavidgomesdev%2Fflash-dance%2Fblob%2Fmain%2Fhome-assistant%2Flaunchpad_moods.yaml)): the pads. Make an
+   automation from it, and pick that script as its **mood script**. It also takes:
+   - **Scenes and scripts**, Home Assistant's own, picked from a list: each gets a
+     pad, from the top left, named after the entity, in a rainbow. Pressed, it runs.
+   - **Playlists**, added one at a time in a form: a name, a Spotify playlist (URI
+     or link), and optionally a Launchpad effect from a list, a row (1 is the top;
+     the pad goes after what is on that row already, or after the pad before it
+     without one) and a colour from a picker (white without one).
 
-Scenes and scripts are coloured in a rainbow, in order. A scene sets how things look; a script
-runs steps, which is what playing music needs. The mood script, with the
-[Spotify](https://www.home-assistant.io/integrations/spotify/) integration
-(Premium only, and the speaker must already be one Spotify knows; check the
-speaker's name in the Spotify entity's `source_list`):
-
-```yaml
-alias: Launchpad mood
-fields:
-  playlist:
-    required: true
-    selector: {text: {}}
-  effect:
-    selector: {text: {}}
-sequence:
-  - action: media_player.select_source
-    target: {entity_id: media_player.spotify}
-    data: {source: Living room}
-  # Home Assistant offers play_media only once it sees a device playing, and it
-  # polls Spotify: ask it to look again until it does, for up to 10 s.
-  - repeat:
-      sequence:
-        - delay: 1
-        - action: homeassistant.update_entity
-          target: {entity_id: media_player.spotify}
-      until: >-
-        {{ state_attr('media_player.spotify', 'supported_features') | int(0) > 2048
-           or repeat.index >= 10 }}
-  - action: media_player.play_media
-    target: {entity_id: media_player.spotify}
-    data:
-      media_content_id: "{{ playlist }}"
-      media_content_type: playlist
-  - if: "{{ effect | default('') != '' }}"
-    then:
-      - action: light.turn_on
-        target: {entity_id: light.launchpad}
-        data: {effect: "{{ effect }}"}
-```
+Without the import links, copy each file to `config/blueprints/<automation or
+script>/flash-dance/` and reload. A scene sets how things look; a script runs
+steps, which is what playing music needs — hence a script for playlists.
 
 **By hand:** publish the list, **retained**, to `flash-dance/moods/set` (an empty
 list removes them), and trigger on the event entity. Trigger on its state, not on
