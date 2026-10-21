@@ -5,6 +5,7 @@
 //! `FLASH_DANCE_SOURCE` picks what the sound effects listen to, by any part of a
 //! PulseAudio source name; the default is whatever the machine is playing.
 
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
 use flash_dance_effects::{EFFECTS, Effect, run};
@@ -33,5 +34,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = std::env::var("FLASH_DANCE_SOURCE").ok();
     println!("(User picks an effect, up/down brightness, left/right speed, Stop/Solo/Mute quits)");
     // Nothing here ever sets it: from a terminal, the device's quit button ends it.
-    run(start, source.as_deref(), &AtomicBool::new(false), |_| {})
+    run(
+        start,
+        source.as_deref(),
+        &Mutex::new(Vec::new()),
+        &AtomicBool::new(false),
+        |_| {},
+    )
 }

@@ -306,6 +306,12 @@ device, so the one-session rule and the joining stop hold for it too.
   whether or not the panel is running, and the panel redraws only when it changes.
   The picture is ordinary 0..255 RGB, divided by 255 into `Grid`; `Grid::lights`
   then does the gamma step, so do not add another.
+- **Scenes are names HA hands the Pi.** `runner`'s scene list is set from the
+  retained `flash-dance/scenes/set` and read by both sessions every frame; Session
+  shows it. A press reports `Report::Scene`, the effect stops, and `runner` shows
+  `SCENES` as the effect, which the light publishes as `"effect": null` — the
+  key must be there, HA keeps the old effect when it is missing. The names are the
+  scene entity's `event_types`, so a list with new names re-announces the device.
 - **`try_publish`, never `publish`.** The bridge is the loop that drains rumqttc's
   queue; awaiting room in it from that loop would wait forever.
 - **State is polled once a second**, not pushed, so a session ended on the device

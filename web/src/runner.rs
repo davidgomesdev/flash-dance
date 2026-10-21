@@ -8,8 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use flash_dance::Event;
-use flash_dance_effects::{EFFECTS, Picture, Report};
+use flash_dance_effects::{EFFECTS, Picture, Report, Scene};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::app::{EffectInfo, SourceInfo, Status};
@@ -18,12 +17,19 @@ use crate::app::{EffectInfo, SourceInfo, Status};
 /// Started by name like any effect, which no effect name collides with.
 pub const PANEL: &str = "panel";
 
+/// What a session is showing once a scene was pressed: no effect. Not a name to
+/// start; no effect name collides with it either.
+pub const SCENES: &str = "scenes";
+
 /// What the panel shows. Painted from outside (Home Assistant, over MQTT) whether
 /// or not the panel is running, so switching to it shows the latest picture at once.
 static PICTURE: Mutex<Picture> = Mutex::new([[[0; 3]; 8]; 8]);
 
-/// Who hears the button events of whatever session is running.
-static LISTENER: Mutex<Option<UnboundedSender<Event>>> = Mutex::new(None);
+/// What Session shows. Set from outside like [`PICTURE`], and read by every session.
+static SCENE_LIST: Mutex<Vec<Scene>> = Mutex::new(Vec::new());
+
+/// Who hears the button events and scene presses of whatever session is running.
+static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
 
 /// The one session. The Launchpad has a single MIDI port and a session holds it
 /// open, so exactly one effect can run at a time — starting one stops the last.
@@ -60,9 +66,15 @@ pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
     }
 }
 
-/// Every button event from now on, from every session. There is one listener;
-/// a second call takes over from the first.
-pub fn listen() -> UnboundedReceiver<Event> {
+/// Replaces the scenes Session shows; a running session shows the new list at once.
+pub fn set_scenes(scenes: Vec<Scene>) {
+    *lock(&SCENE_LIST) = scenes;
+}
+
+/// Every button event and scene press from now on, from every session, as
+/// [`Report::Event`] and [`Report::Scene`]. There is one listener; a second call
+/// takes over from the first.
+pub fn listen() -> UnboundedReceiver<Report> {
     let (tx, rx) = unbounded_channel();
     *lock(&LISTENER) = Some(tx);
     rx
@@ -116,10 +128,13 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
     let report = move |report| match report {
         Report::Showing(effect) => *lock(&shown) = effect.name(),
-        Report::Event(event) => {
+        heard => {
+            if matches!(heard, Report::Scene(_)) {
+                *lock(&shown) = SCENES;
+            }
             // Nobody listening, or the listener gone, is not the session's problem.
             if let Some(listener) = lock(&LISTENER).as_ref() {
-                let _ = listener.send(event);
+                let _ = listener.send(heard);
             }
         }
     };
@@ -127,8 +142,10 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         .name(format!("effect: {name}"))
         .spawn(move || {
             match effect {
-                Some(effect) => flash_dance_effects::run(effect, source.as_deref(), &flag, report),
-                None => flash_dance_effects::panel(&PICTURE, &flag, report),
+                Some(effect) => {
+                    flash_dance_effects::run(effect, source.as_deref(), &SCENE_LIST, &flag, report)
+                }
+                None => flash_dance_effects::panel(&PICTURE, &SCENE_LIST, &flag, report),
             }
             .map_err(|e| e.to_string())
         })
