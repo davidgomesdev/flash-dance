@@ -1048,6 +1048,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_moods_blueprint_offers_every_effect() {
+        // Its effect dropdown is written out by hand: Home Assistant cannot ask.
+        let blueprint = include_str!("../../home-assistant/launchpad_moods.yaml");
+        for effect in EFFECTS {
+            let option = format!("- {}\n", effect.name());
+            assert!(blueprint.contains(&option), "missing {:?}", effect.name());
+        }
+    }
+
+    #[test]
     fn names_are_unique_because_callers_look_effects_up_by_them() {
         for (i, a) in EFFECTS.iter().enumerate() {
             for b in &EFFECTS[i + 1..] {

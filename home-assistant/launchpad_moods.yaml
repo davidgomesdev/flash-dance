@@ -35,14 +35,62 @@ blueprint:
     playlists:
       name: Playlists
       description: >-
-        One per pad: `name`, `playlist` (a Spotify URI or link), and optionally
-        `effect` (a Launchpad effect), `row` (1 is the top; the pad goes after
-        what is on that row already) and `rgb` (the pad's colour, 0-255 each;
-        white otherwise). For example:
-        `[{name: Chill, playlist: "spotify:playlist:…", effect: plasma, row: 2, rgb: [255, 0, 128]}]`
+        One per pad. A row (1 is the top) puts the pad after what is on that row
+        already; without one it goes after the pad before it. No colour is white.
       default: []
       selector:
-        object: {}
+        object:
+          multiple: true
+          label_field: name
+          description_field: playlist
+          fields:
+            name:
+              label: Name
+              required: true
+              selector:
+                text: {}
+            playlist:
+              label: Spotify playlist (URI or link)
+              required: true
+              selector:
+                text: {}
+            effect:
+              label: Launchpad effect
+              selector:
+                select:
+                  # The effects library's names; a test there keeps this in step.
+                  custom_value: true
+                  options:
+                    - rainbow diagonal
+                    - plasma
+                    - fire
+                    - rain
+                    - ripple rings
+                    - radar sweep
+                    - starfield
+                    - colour wipe
+                    - ripple on press
+                    - comet trail
+                    - velocity heat
+                    - lasers
+                    - gravity
+                    - pressure map
+                    - spectrum
+                    - pitch meter
+                    - beat rings
+                    - sound fire
+                    - panel
+            row:
+              label: Row
+              selector:
+                number:
+                  min: 1
+                  max: 8
+                  mode: box
+            rgb:
+              label: Colour
+              selector:
+                color_rgb: {}
 
 # Every trigger while the last run still goes would only repeat it.
 mode: queued
@@ -98,7 +146,7 @@ actions:
                 {% endfor %}
                 {% for p in playlists %}
                   {% set items.all = items.all + [{
-                    'name': p.name, 'row': p.row | default(0) | int, 'rgb': p.rgb | default([255, 255, 255])}] %}
+                    'name': p.name, 'row': p.row | default(0, true) | int, 'rgb': p.rgb | default([255, 255, 255], true)}] %}
                 {% endfor %}
                 {% for item in items.all %}
                   {% if item.row %}{% set ns.y = item.row - 1 %}{% endif %}
@@ -134,12 +182,13 @@ actions:
                   {% endif %}
                 {% endfor %}
                 {{ ns.found }}
+              # Empty fields may be missing or null; both read as ''.
               playlist: >-
-                {{ (playlists | selectattr('name', 'eq', name) | map(attribute='playlist')
-                    | first) | default('') }}
+                {% set p = playlists | selectattr('name', 'eq', name) | first %}
+                {{ (p.playlist if p else '') or '' }}
               effect: >-
-                {{ (playlists | selectattr('name', 'eq', name) | map(attribute='effect',
-                    default='') | first) | default('') }}
+                {% set p = playlists | selectattr('name', 'eq', name) | first %}
+                {{ (p.effect if p else '') or '' }}
           - choose:
               - conditions: "{{ entity != '' }}"
                 sequence:

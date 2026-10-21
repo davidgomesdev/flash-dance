@@ -120,18 +120,13 @@ automations, and make an automation from it. It takes:
 
 - **Scenes and scripts**, Home Assistant's own, picked from a list: each gets a pad, from the top left,
   named after the entity. Pressed, it runs.
-- **Playlists**, one per pad, each running one **mood script** with its playlist
-  and effect. `row` (1 is the top) puts a playlist on that row, after what is on it
-  already; without one it goes after the pad before it. `rgb` (0–255 each) picks
-  its colour:
+- **Playlists**, added one at a time in a form, each running one **mood script**
+  with its playlist and effect: a name, a Spotify playlist (URI or link), and
+  optionally a Launchpad effect from a list, a row (1 is the top; the pad goes
+  after what is on that row already, or after the pad before it without one) and
+  a colour from a picker (white without one).
 
-  ```yaml
-  - {name: Chill, playlist: "spotify:playlist:37i9dQZF1DX4WYpdgoIcn6", effect: plasma, row: 3, rgb: [0, 120, 255]}
-  - {name: Jazz, playlist: "spotify:playlist:37i9dQZF1DXbITWG1ZJKYt"}
-  - {name: Rock, playlist: "spotify:playlist:37i9dQZF1DWXRqgorJj26U", effect: spectrum, row: 4}
-  ```
-
-A playlist without an `rgb` is white; scenes and scripts are coloured in a rainbow, in order. A scene sets how things look; a script
+Scenes and scripts are coloured in a rainbow, in order. A scene sets how things look; a script
 runs steps, which is what playing music needs. The mood script, with the
 [Spotify](https://www.home-assistant.io/integrations/spotify/) integration
 (Premium only, and the speaker must already be one Spotify knows):
