@@ -1,25 +1,47 @@
-# The Launchpad's Session button, filled from Home Assistant's own UI: pick scenes
-# and scripts, and each gets a pad, in order from the top left, in a rainbow. A pad
-# pressed (on the device or the website) runs its scene or script.
+# The Launchpad's Session button, filled from Home Assistant's own UI: scenes and
+# scripts picked from a list, and playlists that run one party script with their
+# playlist and effect. A pad pressed (on the device or the website) runs its own.
 #
 # Install: copy this file to config/blueprints/automation/flash-dance/ and reload
 # automations, then Settings → Automations → Blueprints → Launchpad scenes.
 blueprint:
   name: Launchpad scenes
   description: >-
-    Puts scenes and scripts on the Launchpad's Session button, and runs the one
-    pressed. A pad's name is the entity's friendly name.
+    Puts scenes, scripts and playlists on the Launchpad's Session button, and runs
+    the one pressed. Scenes and scripts come first, from the top left, named after
+    the entity; then the playlists, each where its `row` says or after the last pad.
   domain: automation
   source_url: https://github.com/davidgomesdev/flash-dance/blob/main/home-assistant/launchpad_scenes.yaml
   input:
     targets:
       name: Scenes and scripts
-      description: In pad order, from the top left. Up to 64.
+      description: In pad order, from the top left.
+      default: []
       selector:
         entity:
           multiple: true
           filter:
             - domain: [scene, script]
+    party_script:
+      name: Party script
+      description: >-
+        Run for a playlist pad, with the variables `playlist` and `effect` (empty
+        when the pad has none).
+      default: ""
+      selector:
+        entity:
+          filter:
+            - domain: script
+    playlists:
+      name: Playlists
+      description: >-
+        One per pad: `name`, `playlist` (a Spotify URI or link), and optionally
+        `effect` (a Launchpad effect) and `row` (1 is the top; the pad goes after
+        what is on that row already). For example:
+        `[{name: Chill, playlist: "spotify:playlist:…", effect: plasma, row: 2}]`
+      default: []
+      selector:
+        object: {}
 
 # Every trigger while the last run still goes would only repeat it.
 mode: queued
@@ -41,6 +63,8 @@ triggers:
 
 variables:
   targets: !input targets
+  party_script: !input party_script
+  playlists: !input playlists
   # Eight hues, cycling: the same rainbow the effect picker has, near enough.
   palette:
     - [255, 0, 0]
@@ -62,15 +86,36 @@ actions:
             data:
               topic: flash-dance/scenes/set
               retain: true
+              # `rows` counts the pads used on each row, which is where the next
+              # pad on it goes; `y` is the row the last pad went on.
               payload: >-
-                {% set ns = namespace(list=[]) %}
-                {% for entity in targets[:64] %}
-                  {% set i = loop.index0 %}
-                  {% set ns.list = ns.list + [{
-                    'pad': [i % 8, i // 8],
-                    'name': state_attr(entity, 'friendly_name') or entity,
-                    'rgb': palette[i % 8],
-                  }] %}
+                {% set ns = namespace(rows=[0] * 8, y=0, found=-1, list=[]) %}
+                {% set items = namespace(all=[]) %}
+                {% for entity in targets %}
+                  {% set items.all = items.all + [{
+                    'name': state_attr(entity, 'friendly_name') or entity, 'row': 0}] %}
+                {% endfor %}
+                {% for p in playlists %}
+                  {% set items.all = items.all + [{'name': p.name, 'row': p.row | default(0) | int}] %}
+                {% endfor %}
+                {% for item in items.all %}
+                  {% if item.row %}{% set ns.y = item.row - 1 %}{% endif %}
+                  {% set ns.found = -1 %}
+                  {% for y in range(ns.y, 8) %}
+                    {% if ns.found < 0 and ns.rows[y] < 8 and (not item.row or y == ns.y) %}
+                      {% set ns.found = y %}
+                    {% endif %}
+                  {% endfor %}
+                  {% if ns.found >= 0 %}
+                    {% set y = ns.found %}
+                    {% set ns.list = ns.list + [{
+                      'pad': [ns.rows[y], y],
+                      'name': item.name,
+                      'rgb': palette[ns.list | length % 8],
+                    }] %}
+                    {% set ns.rows = ns.rows[:y] + [ns.rows[y] + 1] + ns.rows[y + 1:] %}
+                    {% set ns.y = y %}
+                  {% endif %}
                 {% endfor %}
                 {{ ns.list | to_json }}
       - conditions:
@@ -78,18 +123,34 @@ actions:
             id: press
         sequence:
           - variables:
-              pressed: >-
+              name: "{{ trigger.to_state.attributes.event_type }}"
+              entity: >-
                 {% set ns = namespace(found='') %}
-                {% for entity in targets %}
-                  {% if not ns.found and (state_attr(entity, 'friendly_name') or entity)
-                        == trigger.to_state.attributes.event_type %}
-                    {% set ns.found = entity %}
+                {% for e in targets %}
+                  {% if not ns.found and (state_attr(e, 'friendly_name') or e) == name %}
+                    {% set ns.found = e %}
                   {% endif %}
                 {% endfor %}
                 {{ ns.found }}
-          - condition: template
-            value_template: "{{ pressed != '' }}"
-          # turn_on runs a script and activates a scene alike.
-          - action: homeassistant.turn_on
-            target:
-              entity_id: "{{ pressed }}"
+              playlist: >-
+                {{ (playlists | selectattr('name', 'eq', name) | map(attribute='playlist')
+                    | first) | default('') }}
+              effect: >-
+                {{ (playlists | selectattr('name', 'eq', name) | map(attribute='effect',
+                    default='') | first) | default('') }}
+          - choose:
+              - conditions: "{{ entity != '' }}"
+                sequence:
+                  # turn_on runs a script and activates a scene alike.
+                  - action: homeassistant.turn_on
+                    target:
+                      entity_id: "{{ entity }}"
+              - conditions: "{{ playlist != '' and party_script != '' }}"
+                sequence:
+                  - action: script.turn_on
+                    target:
+                      entity_id: "{{ party_script }}"
+                    data:
+                      variables:
+                        playlist: "{{ playlist }}"
+                        effect: "{{ effect }}"

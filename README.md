@@ -115,16 +115,33 @@ with the scene's name as the event type.
 
 **The easy way:** the [Launchpad scenes](home-assistant/launchpad_scenes.yaml)
 blueprint. Copy it to `config/blueprints/automation/flash-dance/`, reload
-automations, and make an automation from it: pick scenes and scripts, and each gets
-a pad, in order from the top left, named after the entity, in a rainbow. A pad
-pressed runs its scene or script.
+automations, and make an automation from it. It takes:
 
-A scene sets how things look; a script runs steps, which is what playing music
-needs. A Party script, with the [Spotify](https://www.home-assistant.io/integrations/spotify/)
-integration (Premium only, and the speaker must already be one Spotify knows):
+- **Scenes and scripts**, picked from a list: each gets a pad, from the top left,
+  named after the entity. Pressed, it runs.
+- **Playlists**, one per pad, each running one **party script** with its playlist
+  and effect. `row` (1 is the top) puts a playlist on that row, after what is on it
+  already; without one it goes after the pad before it:
+
+  ```yaml
+  - {name: Chill, playlist: "spotify:playlist:37i9dQZF1DX4WYpdgoIcn6", effect: plasma, row: 3}
+  - {name: Jazz, playlist: "spotify:playlist:37i9dQZF1DXbITWG1ZJKYt"}
+  - {name: Rock, playlist: "spotify:playlist:37i9dQZF1DWXRqgorJj26U", effect: spectrum, row: 4}
+  ```
+
+Pads are coloured in a rainbow, in order. A scene sets how things look; a script
+runs steps, which is what playing music needs. The party script, with the
+[Spotify](https://www.home-assistant.io/integrations/spotify/) integration
+(Premium only, and the speaker must already be one Spotify knows):
 
 ```yaml
-alias: Party
+alias: Launchpad party
+fields:
+  playlist:
+    required: true
+    selector: {text: {}}
+  effect:
+    selector: {text: {}}
 sequence:
   - action: media_player.select_source
     target: {entity_id: media_player.spotify}
@@ -132,11 +149,13 @@ sequence:
   - action: media_player.play_media
     target: {entity_id: media_player.spotify}
     data:
-      media_content_id: spotify:playlist:37i9dQZF1DXaXB8fQg7xif
+      media_content_id: "{{ playlist }}"
       media_content_type: playlist
-  - action: light.turn_on
-    target: {entity_id: light.launchpad}
-    data: {effect: spectrum}
+  - if: "{{ effect | default('') != '' }}"
+    then:
+      - action: light.turn_on
+        target: {entity_id: light.launchpad}
+        data: {effect: "{{ effect }}"}
 ```
 
 **By hand:** publish the list, **retained**, to `flash-dance/scenes/set` (an empty
@@ -157,7 +176,8 @@ conditions:
     attribute: event_type
     state: Party
 actions:
-  - action: script.party
+  - action: script.launchpad_party
+    data: {playlist: "spotify:playlist:37i9dQZF1DX4WYpdgoIcn6"}
 ```
 
 ## Listening
