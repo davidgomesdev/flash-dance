@@ -1,0 +1,87 @@
+# What a playlist mood runs: Spotify plays the playlist on a speaker, and the
+# Launchpad shows the effect, if the mood has one. The Launchpad moods blueprint
+# calls it with `playlist` and `effect`.
+blueprint:
+  name: Launchpad mood script
+  description: >-
+    Plays a Spotify playlist on a speaker and sets a Launchpad effect. Pick the
+    script made from this as the Launchpad moods automation's mood script. Needs
+    Spotify Premium.
+  domain: script
+  source_url: https://github.com/davidgomesdev/flash-dance/blob/main/home-assistant/launchpad_mood_script.yaml
+  input:
+    player:
+      name: Spotify player
+      selector:
+        entity:
+          filter:
+            - integration: spotify
+              domain: media_player
+    speaker:
+      name: Speaker
+      description: >-
+        As Spotify names it: the player's `source_list` attribute has them. Empty
+        plays on whichever is in use.
+      default: ""
+      selector:
+        text: {}
+    launchpad:
+      name: Launchpad
+      default: light.launchpad
+      selector:
+        entity:
+          filter:
+            - domain: light
+
+# A mood pressed while the last one is starting wins.
+mode: restart
+
+fields:
+  playlist:
+    name: Playlist
+    description: A Spotify playlist, as a URI or a link.
+    required: true
+    selector:
+      text: {}
+  effect:
+    name: Effect
+    description: A Launchpad effect; empty leaves the Launchpad as it is.
+    selector:
+      text: {}
+
+variables:
+  player: !input player
+  speaker: !input speaker
+
+sequence:
+  - if: "{{ speaker != '' }}"
+    then:
+      - action: media_player.select_source
+        target:
+          entity_id: !input player
+        data:
+          source: "{{ speaker }}"
+  # Home Assistant offers play_media only once it sees a device playing, and it
+  # polls Spotify: ask it to look again until it does, for up to 10 s.
+  - repeat:
+      sequence:
+        - delay: 1
+        - action: homeassistant.update_entity
+          target:
+            entity_id: !input player
+      until: >-
+        {{ state_attr(player, 'supported_features') | int(0) > 2048
+           or repeat.index >= 10 }}
+  - action: media_player.play_media
+    target:
+      entity_id: !input player
+    data:
+      media_content_id: "{{ playlist }}"
+      media_content_type: playlist
+  - if: "{{ effect | default('') != '' }}"
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: !input launchpad
+        data:
+          effect: "{{ effect }}"
