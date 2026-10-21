@@ -1,0 +1,95 @@
+# The Launchpad's Session button, filled from Home Assistant's own UI: pick scenes
+# and scripts, and each gets a pad, in order from the top left, in a rainbow. A pad
+# pressed (on the device or the website) runs its scene or script.
+#
+# Install: copy this file to config/blueprints/automation/flash-dance/ and reload
+# automations, then Settings → Automations → Blueprints → Launchpad scenes.
+blueprint:
+  name: Launchpad scenes
+  description: >-
+    Puts scenes and scripts on the Launchpad's Session button, and runs the one
+    pressed. A pad's name is the entity's friendly name.
+  domain: automation
+  source_url: https://github.com/davidgomesdev/flash-dance/blob/main/home-assistant/launchpad_scenes.yaml
+  input:
+    targets:
+      name: Scenes and scripts
+      description: In pad order, from the top left. Up to 64.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: [scene, script]
+
+# Every trigger while the last run still goes would only repeat it.
+mode: queued
+
+triggers:
+  # The list is retained by the broker, so it only needs sending when it changes:
+  # this automation saved, or Home Assistant started.
+  - trigger: homeassistant
+    event: start
+    id: list
+  - trigger: event
+    event_type: automation_reloaded
+    id: list
+  - trigger: state
+    entity_id: event.launchpad_scene
+    not_from: [unavailable, unknown]
+    not_to: [unavailable, unknown]
+    id: press
+
+variables:
+  targets: !input targets
+  # Eight hues, cycling: the same rainbow the effect picker has, near enough.
+  palette:
+    - [255, 0, 0]
+    - [255, 128, 0]
+    - [255, 220, 0]
+    - [0, 255, 0]
+    - [0, 220, 255]
+    - [0, 80, 255]
+    - [160, 0, 255]
+    - [255, 0, 160]
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: list
+        sequence:
+          - action: mqtt.publish
+            data:
+              topic: flash-dance/scenes/set
+              retain: true
+              payload: >-
+                {% set ns = namespace(list=[]) %}
+                {% for entity in targets[:64] %}
+                  {% set i = loop.index0 %}
+                  {% set ns.list = ns.list + [{
+                    'pad': [i % 8, i // 8],
+                    'name': state_attr(entity, 'friendly_name') or entity,
+                    'rgb': palette[i % 8],
+                  }] %}
+                {% endfor %}
+                {{ ns.list | to_json }}
+      - conditions:
+          - condition: trigger
+            id: press
+        sequence:
+          - variables:
+              pressed: >-
+                {% set ns = namespace(found='') %}
+                {% for entity in targets %}
+                  {% if not ns.found and (state_attr(entity, 'friendly_name') or entity)
+                        == trigger.to_state.attributes.event_type %}
+                    {% set ns.found = entity %}
+                  {% endif %}
+                {% endfor %}
+                {{ ns.found }}
+          - condition: template
+            value_template: "{{ pressed != '' }}"
+          # turn_on runs a script and activates a scene alike.
+          - action: homeassistant.turn_on
+            target:
+              entity_id: "{{ pressed }}"
