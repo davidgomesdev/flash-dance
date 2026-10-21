@@ -95,8 +95,8 @@ off. Home Assistant gets one device, **Launchpad**, with:
 - **Audio source**, a select for what the sound effects listen to;
 - **Pad**, an event entity (`event.launchpad_pad`) firing `press` and `release`
   with the pad's `x`, `y` (from the top left) and the press velocity.
-- **Scene**, an event entity (`event.launchpad_scene`) whose event type is the
-  name of the scene pressed — there once Home Assistant has listed scenes.
+- **Mood**, an event entity (`event.launchpad_mood`) whose event type is the
+  name of the mood pressed — there once Home Assistant has listed moods.
 
 To paint the panel, publish `{"pad": [x, y], "rgb": [r, g, b]}`, or a list of
 them, to `flash-dance/grid/set` — from an automation, with `mqtt.publish`. The
@@ -104,22 +104,23 @@ picture is kept while an effect runs, so switching to `panel` shows it at once.
 The bridge publishes `online` on `flash-dance/availability` each time it
 connects; trigger on that to repaint everything after a restart.
 
-### Scenes
+### Moods
 
-**Session** (top row, fifth button) swaps the grid for scene pads; **User** still
-opens the effect picker. The website has the same two, as **Scenes** and
-**Effects**, and pressing a scene there is pressing it on the device (starting a
-session first if none is running). Pressing a scene stops the effect — the light
-stays on with no effect — pulses its pad for 5 s and fires `event.launchpad_scene`
-with the scene's name as the event type.
+A mood is a pad that tells Home Assistant to do something: play a playlist, set
+the lights, start an effect. **Session** (top row, fifth button) swaps the grid for
+the mood pads; **User** still opens the effect picker. The website has the same
+two, as **Moods** and **Effects**, and pressing a mood there is pressing it on the
+device (starting a session first if none is running). Pressing a mood stops the
+effect — the light stays on with no effect — pulses its pad for 5 s and fires
+`event.launchpad_mood` with the mood's name as the event type.
 
-**The easy way:** the [Launchpad scenes](home-assistant/launchpad_scenes.yaml)
+**The easy way:** the [Launchpad moods](home-assistant/launchpad_moods.yaml)
 blueprint. Copy it to `config/blueprints/automation/flash-dance/`, reload
 automations, and make an automation from it. It takes:
 
-- **Scenes and scripts**, picked from a list: each gets a pad, from the top left,
+- **Scenes and scripts**, Home Assistant's own, picked from a list: each gets a pad, from the top left,
   named after the entity. Pressed, it runs.
-- **Playlists**, one per pad, each running one **party script** with its playlist
+- **Playlists**, one per pad, each running one **mood script** with its playlist
   and effect. `row` (1 is the top) puts a playlist on that row, after what is on it
   already; without one it goes after the pad before it. `rgb` (0–255 each) picks
   its colour:
@@ -131,12 +132,12 @@ automations, and make an automation from it. It takes:
   ```
 
 A playlist without an `rgb` is white; scenes and scripts are coloured in a rainbow, in order. A scene sets how things look; a script
-runs steps, which is what playing music needs. The party script, with the
+runs steps, which is what playing music needs. The mood script, with the
 [Spotify](https://www.home-assistant.io/integrations/spotify/) integration
 (Premium only, and the speaker must already be one Spotify knows):
 
 ```yaml
-alias: Launchpad party
+alias: Launchpad mood
 fields:
   playlist:
     required: true
@@ -159,25 +160,25 @@ sequence:
         data: {effect: "{{ effect }}"}
 ```
 
-**By hand:** publish the list, **retained**, to `flash-dance/scenes/set` (an empty
+**By hand:** publish the list, **retained**, to `flash-dance/moods/set` (an empty
 list removes them), and trigger on the event entity. Trigger on its state, not on
-its `event_type` attribute: pressing the same scene twice changes only the state.
+its `event_type` attribute: pressing the same mood twice changes only the state.
 
 ```json
-[{"pad": [0, 0], "name": "Party", "rgb": [255, 0, 128]}]
+[{"pad": [0, 0], "name": "Chill", "rgb": [255, 0, 128]}]
 ```
 
 ```yaml
 triggers:
   - trigger: state
-    entity_id: event.launchpad_scene
+    entity_id: event.launchpad_mood
 conditions:
   - condition: state
-    entity_id: event.launchpad_scene
+    entity_id: event.launchpad_mood
     attribute: event_type
-    state: Party
+    state: Chill
 actions:
-  - action: script.launchpad_party
+  - action: script.launchpad_mood
     data: {playlist: "spotify:playlist:37i9dQZF1DX4WYpdgoIcn6"}
 ```
 

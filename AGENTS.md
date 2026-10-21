@@ -306,15 +306,16 @@ device, so the one-session rule and the joining stop hold for it too.
   whether or not the panel is running, and the panel redraws only when it changes.
   The picture is ordinary 0..255 RGB, divided by 255 into `Grid`; `Grid::lights`
   then does the gamma step, so do not add another.
-- **Scenes are names HA hands the Pi.** `runner`'s scene list is set from the
-  retained `flash-dance/scenes/set` and read by both sessions every frame; Session
-  shows it. A press reports `Report::Scene`, the effect stops, and `runner` reports
-  `Status::Scene`, which the light publishes as `"effect": null` — the
-  key must be there, HA keeps the old effect when it is missing. The names are the
-  scene entity's `event_types`, so a list with new names re-announces the device.
-  The website presses a scene through `Scenes::pressed`, which the session takes
-  next frame and handles like its own press, report included, so HA hears about
-  it the one way.
+- **Moods are names HA hands the Pi.** A mood is a named, coloured pad that tells
+  HA to do something; the name avoids HA's own scenes. `runner`'s mood list is set
+  from the retained `flash-dance/moods/set` and read by both sessions every frame;
+  Session shows it. A press reports `Report::Mood`, the effect stops, and `runner`
+  reports `Status::Mood`, which the light publishes as `"effect": null` — the key
+  must be there, HA keeps the old effect when it is missing. The names are the mood
+  entity's `event_types`, so a list with new names re-announces the device. The
+  website presses a mood through `Moods::pressed`, which the session takes next
+  frame and handles like its own press, report included, so HA hears about it the
+  one way.
 - **`try_publish`, never `publish`.** The bridge is the loop that drains rumqttc's
   queue; awaiting room in it from that loop would wait forever.
 - **State is polled once a second**, not pushed, so a session ended on the device

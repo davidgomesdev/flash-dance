@@ -3,8 +3,8 @@
 //! the web server call it. Four of the effects listen to an audio source.
 //!
 //! - **User** (top row, rightmost) opens the picker; tap a lit pad to choose.
-//! - **Session** (top row, fifth) shows the [`Scene`]s someone else named; tap one
-//!   and the effect stops, the scene's pad pulsing for a few seconds. Session again
+//! - **Session** (top row, fifth) shows the [`Mood`]s someone else named; tap one
+//!   and the effect stops, the mood's pad pulsing for a few seconds. Session again
 //!   goes back to the effect, if one is still showing.
 //! - **Up / down** change brightness. No on-screen indicator: the whole grid gets
 //!   brighter or dimmer, which is the indicator.
@@ -30,7 +30,7 @@ use flash_dance_audio::{Audio, Sound};
 const MENU: Pad = Pad(98); // top row, rightmost, "User"
 const SESSION: Pad = Pad(95); // top row, fifth, "Session"
 const FPS: f64 = 30.0;
-/// Seconds a pressed scene pulses: long enough to see it took, short enough not to nag.
+/// Seconds a pressed mood pulses: long enough to see it took, short enough not to nag.
 const GLOW: f32 = 5.0;
 
 fn quit_button() -> Pad {
@@ -615,7 +615,7 @@ fn step(index: usize, by: i32, len: usize) -> Option<usize> {
 }
 
 /// The buttons that do something, in a dim white: noticeable, but not competing
-/// with the effect. The four arrows, scenes and the picker; quit has its own colour.
+/// with the effect. The four arrows, moods and the picker; quit has its own colour.
 fn controls() -> impl Iterator<Item = (Pad, Light)> {
     (0..4)
         .map(Pad::top)
@@ -665,18 +665,18 @@ fn draw_picker(pad: &mut Launchpad, current: Option<usize>) -> Result<()> {
 pub enum Report {
     /// The effect now showing: the one it started on, then each one picked.
     Showing(Effect),
-    /// A scene was pressed, by name. Nothing is showing from then until an effect
+    /// A mood was pressed, by name. Nothing is showing from then until an effect
     /// is picked.
-    Scene(String),
+    Mood(String),
     /// Every button event, controls included, as the device sent it, except the
-    /// picker's and the scenes': choosing one is not pressing a pad.
+    /// picker's and the moods': choosing one is not pressing a pad.
     Event(Event),
 }
 
 /// A pad someone else names and colours, Home Assistant most likely, for
 /// Session to show. `x` from the left, `y` from the top, `rgb` ordinary 0..=255.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Scene {
+pub struct Mood {
     pub x: u8,
     pub y: u8,
     pub name: String,
@@ -686,36 +686,36 @@ pub struct Scene {
 /// What Session shows, shared with whoever sets it and read every frame, so a new
 /// list shows at once.
 #[derive(Debug, Default)]
-pub struct Scenes {
-    pub list: Vec<Scene>,
-    /// A scene pressed somewhere else, the website most likely, by name. The
+pub struct Moods {
+    pub list: Vec<Mood>,
+    /// A mood pressed somewhere else, the website most likely, by name. The
     /// session takes it next frame and treats it as a press on its pad.
     pub pressed: Option<String>,
 }
 
-impl Scenes {
+impl Moods {
     pub const fn new() -> Self {
-        Scenes {
+        Moods {
             list: Vec::new(),
             pressed: None,
         }
     }
 }
 
-/// Session's mode, which [`run`] and [`panel`] both have: the scenes on the grid.
-struct SceneMode<'a> {
-    scenes: &'a Mutex<Scenes>,
+/// Session's mode, which [`run`] and [`panel`] both have: the moods on the grid.
+struct MoodMode<'a> {
+    moods: &'a Mutex<Moods>,
     on: bool,
-    /// The scene pressed last, and when; it pulses for [`GLOW`] seconds.
+    /// The mood pressed last, and when; it pulses for [`GLOW`] seconds.
     glow: Option<(Pad, f32)>,
     /// What is on the grid, so it is sent again only when the list or glow change.
-    drawn: Option<(Vec<Scene>, Option<Pad>)>,
+    drawn: Option<(Vec<Mood>, Option<Pad>)>,
 }
 
-impl<'a> SceneMode<'a> {
-    fn new(scenes: &'a Mutex<Scenes>) -> Self {
-        SceneMode {
-            scenes,
+impl<'a> MoodMode<'a> {
+    fn new(moods: &'a Mutex<Moods>) -> Self {
+        MoodMode {
+            moods,
             on: false,
             glow: None,
             drawn: None,
@@ -727,11 +727,11 @@ impl<'a> SceneMode<'a> {
         self.drawn = None;
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'a, Scenes> {
-        self.scenes.lock().unwrap_or_else(|p| p.into_inner())
+    fn lock(&self) -> std::sync::MutexGuard<'a, Moods> {
+        self.moods.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// The scene under `button`, if any, which starts it glowing.
+    /// The mood under `button`, if any, which starts it glowing.
     fn press(&mut self, button: Pad, now: f32) -> Option<String> {
         let (x, y) = button.to_xy()?;
         let name = self
@@ -745,14 +745,14 @@ impl<'a> SceneMode<'a> {
         Some(name)
     }
 
-    /// A scene pressed somewhere else, if it is one: it glows like a press on its
-    /// pad, and the scenes come up to show it.
+    /// A mood pressed somewhere else, if it is one: it glows like a press on its
+    /// pad, and the moods come up to show it.
     fn remote(&mut self, now: f32) -> Option<String> {
-        let mut scenes = self.lock();
-        let name = scenes.pressed.take()?;
-        let scene = scenes.list.iter().find(|s| s.name == name)?;
-        let button = Pad::xy(scene.x, scene.y);
-        drop(scenes);
+        let mut moods = self.lock();
+        let name = moods.pressed.take()?;
+        let mood = moods.list.iter().find(|s| s.name == name)?;
+        let button = Pad::xy(mood.x, mood.y);
+        drop(moods);
         self.glow = Some((button, now));
         self.show();
         Some(name)
@@ -772,12 +772,12 @@ impl<'a> SceneMode<'a> {
             return Ok(());
         }
         let mut picture: Picture = [[[0; 3]; 8]; 8];
-        for scene in &list {
+        for mood in &list {
             if let Some(rgb) = picture
-                .get_mut(scene.y as usize)
-                .and_then(|row| row.get_mut(scene.x as usize))
+                .get_mut(mood.y as usize)
+                .and_then(|row| row.get_mut(mood.x as usize))
             {
-                *rgb = scene.rgb;
+                *rgb = mood.rgb;
             }
         }
         pad.set_all(grid(&picture).lights().map(|(p, light)| {
@@ -793,10 +793,10 @@ impl<'a> SceneMode<'a> {
 }
 
 /// Runs a session on the device: `start` first, then whatever the picker chooses,
-/// with the arrows on speed and brightness and Session on `scenes`, until
+/// with the arrows on speed and brightness and Session on `moods`, until
 /// Stop/Solo/Mute is pressed or `stop` is set. `source` is the audio source the
 /// sound effects listen to, by any part of its name; `None` is whatever the machine
-/// is playing. `report` hears what is showing, each scene pressed and every button
+/// is playing. `report` hears what is showing, each mood pressed and every button
 /// event, on the session's own thread.
 ///
 /// Returns normally either way, so the `Launchpad`'s `Drop` gets to clear the
@@ -806,7 +806,7 @@ impl<'a> SceneMode<'a> {
 pub fn run(
     start: Effect,
     source: Option<&str>,
-    scenes: &Mutex<Scenes>,
+    moods: &Mutex<Moods>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -814,11 +814,11 @@ pub fn run(
     let mut app = App::new(source.map(String::from));
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
-    // `None` once a scene is pressed: the scene stops the effect.
+    // `None` once a mood is pressed: the mood stops the effect.
     let mut current = Some(EFFECTS.iter().position(|e| *e == start).unwrap_or(0));
     let mut picking = false;
-    let mut scenes = SceneMode::new(scenes);
-    // Grid pads pressed in the picker or among the scenes, so their releases stay
+    let mut moods = MoodMode::new(moods);
+    // Grid pads pressed in the picker or among the moods, so their releases stay
     // unreported too.
     let mut picked: Vec<Pad> = Vec::new();
     let (mut wall, mut virtual_time) = (0.0f32, 0.0f32);
@@ -843,16 +843,16 @@ pub fn run(
         wall = now;
         virtual_time += dt;
 
-        if let Some(name) = scenes.remote(now) {
+        if let Some(name) = moods.remote(now) {
             current = None;
             picking = false;
             draw_speed(&mut pad, level)?;
-            println!("scene {name}");
-            report(Report::Scene(name));
+            println!("mood {name}");
+            report(Report::Mood(name));
         }
         for event in &queue {
             match *event {
-                Event::Press(button, _) if (picking || scenes.on) && button.to_xy().is_some() => {
+                Event::Press(button, _) if (picking || moods.on) && button.to_xy().is_some() => {
                     picked.push(button)
                 }
                 Event::Release(button) if picked.contains(&button) => {
@@ -889,39 +889,39 @@ pub fn run(
             }
             if button == MENU {
                 picking = !picking;
-                // Going to the effects lets go of the scene.
-                scenes.glow = None;
+                // Going to the effects lets go of the mood.
+                moods.glow = None;
                 if picking {
-                    scenes.on = false;
+                    moods.on = false;
                     draw_picker(&mut pad, current)?;
                 } else if current.is_some() {
                     app.reset(&mut pad)?;
                     draw_speed(&mut pad, level)?;
                 } else {
-                    // Nothing to go back to: the scenes are all there is.
-                    scenes.show();
+                    // Nothing to go back to: the moods are all there is.
+                    moods.show();
                     draw_speed(&mut pad, level)?;
                 }
                 continue;
             }
             if button == SESSION {
-                if !scenes.on {
+                if !moods.on {
                     picking = false;
-                    scenes.show();
+                    moods.show();
                     draw_speed(&mut pad, level)?;
                 } else if current.is_some() {
-                    scenes.on = false;
+                    moods.on = false;
                     app.reset(&mut pad)?;
                     draw_speed(&mut pad, level)?;
                 }
                 continue;
             }
-            if scenes.on
-                && let Some(name) = scenes.press(button, now)
+            if moods.on
+                && let Some(name) = moods.press(button, now)
             {
                 current = None;
-                println!("scene {name}");
-                report(Report::Scene(name));
+                println!("mood {name}");
+                report(Report::Mood(name));
                 continue;
             }
             if picking && let Some((x, y)) = button.to_xy() {
@@ -937,8 +937,8 @@ pub fn run(
             }
         }
 
-        if scenes.on {
-            scenes.draw(&mut pad, now)?;
+        if moods.on {
+            moods.draw(&mut pad, now)?;
         } else if !picking && let Some(i) = current {
             app.render(&mut pad, EFFECTS[i], virtual_time, dt, &queue)?;
         }
@@ -953,13 +953,13 @@ pub fn run(
 pub type Picture = [[[u8; 3]; 8]; 8];
 
 /// Runs a session that shows `picture` and nothing else: the grid as a panel that
-/// someone else paints, Home Assistant most likely. Session shows `scenes` instead,
+/// someone else paints, Home Assistant most likely. Session shows `moods` instead,
 /// as in [`run`], and pressing one leaves the picture for good. It redraws when the
 /// picture changes, reports every event like [`run`], and quits on Stop/Solo/Mute or
 /// `stop`, returning normally for the same reason [`run`] does.
 pub fn panel(
     picture: &Mutex<Picture>,
-    scenes: &Mutex<Scenes>,
+    moods: &Mutex<Moods>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -967,8 +967,8 @@ pub fn panel(
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
     let mut shown = None;
-    let mut scenes = SceneMode::new(scenes);
-    // False once a scene is pressed, which stops the panel like it stops an effect.
+    let mut moods = MoodMode::new(moods);
+    // False once a mood is pressed, which stops the panel like it stops an effect.
     let mut painting = true;
     let mut picked: Vec<Pad> = Vec::new();
     pad.set_all([
@@ -981,13 +981,13 @@ pub fn panel(
         if stop.load(Ordering::Relaxed) {
             break 'running;
         }
-        if let Some(name) = scenes.remote(now) {
+        if let Some(name) = moods.remote(now) {
             painting = false;
-            report(Report::Scene(name));
+            report(Report::Mood(name));
         }
         for event in &queue {
             match *event {
-                Event::Press(button, _) if scenes.on && button.to_xy().is_some() => {
+                Event::Press(button, _) if moods.on && button.to_xy().is_some() => {
                     picked.push(button)
                 }
                 Event::Release(button) if picked.contains(&button) => {
@@ -1002,21 +1002,21 @@ pub fn panel(
                 break 'running;
             }
             if button == SESSION {
-                if !scenes.on {
-                    scenes.show();
+                if !moods.on {
+                    moods.show();
                 } else if painting {
-                    scenes.on = false;
+                    moods.on = false;
                     shown = None;
                 }
-            } else if scenes.on
-                && let Some(name) = scenes.press(button, now)
+            } else if moods.on
+                && let Some(name) = moods.press(button, now)
             {
                 painting = false;
-                report(Report::Scene(name));
+                report(Report::Mood(name));
             }
         }
-        if scenes.on {
-            scenes.draw(&mut pad, now)?;
+        if moods.on {
+            moods.draw(&mut pad, now)?;
             continue;
         }
         let now = *picture

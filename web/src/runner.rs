@@ -8,10 +8,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use flash_dance_effects::{EFFECTS, Picture, Report, Scene, Scenes};
+use flash_dance_effects::{EFFECTS, Mood, Moods, Picture, Report};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::app::{EffectInfo, SceneInfo, SourceInfo, Status};
+use crate::app::{EffectInfo, MoodInfo, SourceInfo, Status};
 
 /// The session that is not an effect: the grid as a panel, showing [`PICTURE`].
 /// Started by name like any effect, which no effect name collides with.
@@ -21,11 +21,11 @@ pub const PANEL: &str = "panel";
 /// or not the panel is running, so switching to it shows the latest picture at once.
 static PICTURE: Mutex<Picture> = Mutex::new([[[0; 3]; 8]; 8]);
 
-/// What Session shows, and a scene pressed on the website. Set from outside like
+/// What Session shows, and a mood pressed on the website. Set from outside like
 /// [`PICTURE`], and read by every session.
-static SCENES: Mutex<Scenes> = Mutex::new(Scenes::new());
+static MOODS: Mutex<Moods> = Mutex::new(Moods::new());
 
-/// Who hears the button events and scene presses of whatever session is running.
+/// Who hears the button events and mood presses of whatever session is running.
 static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
 
 /// The one session. The Launchpad has a single MIDI port and a session holds it
@@ -33,9 +33,9 @@ static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
 struct Running {
-    /// What is on the grid now, as [`Status::Running`] or [`Status::Scene`]: the
+    /// What is on the grid now, as [`Status::Running`] or [`Status::Mood`]: the
     /// panel, the effect last picked — on the device's own picker too, which is why
-    /// the session reports it — or the scene last pressed.
+    /// the session reports it — or the mood last pressed.
     showing: Arc<Mutex<Status>>,
     stop: Arc<AtomicBool>,
     /// The error is a `String` because the library's is not `Send`.
@@ -64,13 +64,13 @@ pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
     }
 }
 
-/// Replaces the scenes Session shows; a running session shows the new list at once.
-pub fn set_scenes(scenes: Vec<Scene>) {
-    lock(&SCENES).list = scenes;
+/// Replaces the moods Session shows; a running session shows the new list at once.
+pub fn set_moods(moods: Vec<Mood>) {
+    lock(&MOODS).list = moods;
 }
 
-/// Every button event and scene press from now on, from every session, as
-/// [`Report::Event`] and [`Report::Scene`]. There is one listener; a second call
+/// Every button event and mood press from now on, from every session, as
+/// [`Report::Event`] and [`Report::Mood`]. There is one listener; a second call
 /// takes over from the first.
 pub fn listen() -> UnboundedReceiver<Report> {
     let (tx, rx) = unbounded_channel();
@@ -78,14 +78,14 @@ pub fn listen() -> UnboundedReceiver<Report> {
     rx
 }
 
-/// The scenes Session shows, in the order Home Assistant listed them.
-pub fn scenes() -> Vec<SceneInfo> {
-    lock(&SCENES)
+/// The moods Session shows, in the order Home Assistant listed them.
+pub fn moods() -> Vec<MoodInfo> {
+    lock(&MOODS)
         .list
         .iter()
-        .map(|scene| SceneInfo {
-            name: scene.name.clone(),
-            rgb: scene.rgb,
+        .map(|mood| MoodInfo {
+            name: mood.name.clone(),
+            rgb: mood.rgb,
         })
         .collect()
 }
@@ -133,7 +133,7 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     let mut running = running();
     halt(&mut running);
     // A press meant for the session just stopped is not one for this.
-    lock(&SCENES).pressed = None;
+    lock(&MOODS).pressed = None;
 
     let stop = Arc::new(AtomicBool::new(false));
     let showing = Arc::new(Mutex::new(Status::Running(
@@ -143,8 +143,8 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     let report = move |report| match report {
         Report::Showing(effect) => *lock(&shown) = Status::Running(effect.name().to_string()),
         heard => {
-            if let Report::Scene(name) = &heard {
-                *lock(&shown) = Status::Scene(name.clone());
+            if let Report::Mood(name) = &heard {
+                *lock(&shown) = Status::Mood(name.clone());
             }
             // Nobody listening, or the listener gone, is not the session's problem.
             if let Some(listener) = lock(&LISTENER).as_ref() {
@@ -157,9 +157,9 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         .spawn(move || {
             match effect {
                 Some(effect) => {
-                    flash_dance_effects::run(effect, source.as_deref(), &SCENES, &flag, report)
+                    flash_dance_effects::run(effect, source.as_deref(), &MOODS, &flag, report)
                 }
-                None => flash_dance_effects::panel(&PICTURE, &SCENES, &flag, report),
+                None => flash_dance_effects::panel(&PICTURE, &MOODS, &flag, report),
             }
             .map_err(|e| e.to_string())
         })
@@ -172,17 +172,17 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     Ok(state(&mut running))
 }
 
-/// Presses a scene as if on the device, starting a session on the first effect if
+/// Presses a mood as if on the device, starting a session on the first effect if
 /// none is running: the session is what shows it, and what tells Home Assistant.
-pub fn press_scene(name: &str, source: Option<&str>) -> Result<Status, String> {
-    if !lock(&SCENES).list.iter().any(|s| s.name == name) {
-        return Err(format!("there is no scene called {name:?}"));
+pub fn press_mood(name: &str, source: Option<&str>) -> Result<Status, String> {
+    if !lock(&MOODS).list.iter().any(|s| s.name == name) {
+        return Err(format!("there is no mood called {name:?}"));
     }
-    if !matches!(status(), Status::Running(_) | Status::Scene(_)) {
+    if !matches!(status(), Status::Running(_) | Status::Mood(_)) {
         start(EFFECTS[0].name(), source)?;
     }
-    lock(&SCENES).pressed = Some(name.to_string());
-    Ok(Status::Scene(name.to_string()))
+    lock(&MOODS).pressed = Some(name.to_string());
+    Ok(Status::Mood(name.to_string()))
 }
 
 pub fn stop() -> Status {
@@ -216,7 +216,7 @@ fn state(running: &mut Option<Running>) -> Status {
         return showing;
     }
     let effect = match showing {
-        Status::Scene(name) => format!("scene {name}"),
+        Status::Mood(name) => format!("mood {name}"),
         Status::Running(effect) => effect,
         Status::Idle | Status::Failed { .. } => unreachable!("never stored as showing"),
     };

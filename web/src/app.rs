@@ -42,9 +42,9 @@ impl SourceInfo {
     }
 }
 
-/// A scene Home Assistant listed for the device's Session button.
+/// A mood Home Assistant listed for the device's Session button.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SceneInfo {
+pub struct MoodInfo {
     pub name: String,
     pub rgb: [u8; 3],
 }
@@ -55,8 +55,8 @@ pub enum Status {
     #[default]
     Idle,
     Running(String),
-    /// A scene was pressed on the device, which stopped the effect.
-    Scene(String),
+    /// A mood was pressed on the device, which stopped the effect.
+    Mood(String),
     /// The session ended with an error — no device plugged in, most often — and
     /// this is what it was.
     Failed {
@@ -76,13 +76,13 @@ pub async fn list_sources() -> Result<Vec<SourceInfo>, ServerFnError> {
 }
 
 #[server]
-pub async fn list_scenes() -> Result<Vec<SceneInfo>, ServerFnError> {
-    Ok(crate::runner::scenes())
+pub async fn list_moods() -> Result<Vec<MoodInfo>, ServerFnError> {
+    Ok(crate::runner::moods())
 }
 
 #[server]
-pub async fn press_scene(scene: String, source: String) -> Result<Status, ServerFnError> {
-    crate::runner::press_scene(&scene, Some(source.as_str())).map_err(ServerFnError::new)
+pub async fn press_mood(mood: String, source: String) -> Result<Status, ServerFnError> {
+    crate::runner::press_mood(&mood, Some(source.as_str())).map_err(ServerFnError::new)
 }
 
 #[server]
@@ -144,18 +144,18 @@ fn Console() -> impl IntoView {
         |_| async { current_status().await.unwrap_or_default() },
     );
     // Polled with the status: Home Assistant can change the list at any time.
-    let scenes = Resource::new(|| (), |_| async { list_scenes().await.unwrap_or_default() });
+    let moods = Resource::new(|| (), |_| async { list_moods().await.unwrap_or_default() });
     let start = Action::new(move |effect: &String| {
         let (effect, source) = (effect.clone(), source.get_untracked());
         async move { start_effect(effect, source).await }
     });
-    let press = Action::new(move |scene: &String| {
-        let (scene, source) = (scene.clone(), source.get_untracked());
-        async move { press_scene(scene, source).await }
+    let press = Action::new(move |mood: &String| {
+        let (mood, source) = (mood.clone(), source.get_untracked());
+        async move { press_mood(mood, source).await }
     });
     let stop = Action::new(|(): &()| async { stop_effect().await });
     // Which of the device's two modes the page shows, as User and Session do there.
-    let (on_scenes, set_on_scenes) = signal(false);
+    let (on_moods, set_on_moods) = signal(false);
 
     // The effect can also stop itself — Stop/Solo/Mute on the device, or a crash
     // because nothing is plugged in — so the page asks rather than assumes.
@@ -172,7 +172,7 @@ fn Console() -> impl IntoView {
         set_interval(
             move || {
                 status.refetch();
-                scenes.refetch();
+                moods.refetch();
             },
             std::time::Duration::from_millis(1500),
         );
@@ -182,8 +182,8 @@ fn Console() -> impl IntoView {
         Some(Status::Running(effect)) => Some(effect),
         _ => None,
     };
-    let scene = move || match status.get() {
-        Some(Status::Scene(name)) => Some(name),
+    let mood = move || match status.get() {
+        Some(Status::Mood(name)) => Some(name),
         _ => None,
     };
 
@@ -191,7 +191,7 @@ fn Console() -> impl IntoView {
         <main>
             <header>
                 <h1>"flash" <em>"dance"</em></h1>
-                <p class="tagline">"Launchpad Mini MK3 — pick an effect or a scene."</p>
+                <p class="tagline">"Launchpad Mini MK3 — pick an effect or a mood."</p>
             </header>
 
             <StatusBar status=status stop=stop />
@@ -233,15 +233,15 @@ fn Console() -> impl IntoView {
             </section>
 
             <nav class="modes">
-                <button class:on=move || !on_scenes.get() on:click=move |_| set_on_scenes.set(false)>
+                <button class:on=move || !on_moods.get() on:click=move |_| set_on_moods.set(false)>
                     "Effects" <small>"User button"</small>
                 </button>
-                <button class:on=move || on_scenes.get() on:click=move |_| set_on_scenes.set(true)>
-                    "Scenes" <small>"Session button"</small>
+                <button class:on=move || on_moods.get() on:click=move |_| set_on_moods.set(true)>
+                    "Moods" <small>"Session button"</small>
                 </button>
             </nav>
 
-            <Show when=move || on_scenes.get()>
+            <Show when=move || on_moods.get()>
                 <p class="blurb">
                     "Home Assistant's: pressing one stops the effect and tells Home "
                     "Assistant, which does the rest."
@@ -249,13 +249,13 @@ fn Console() -> impl IntoView {
                 // A Transition for the same reason as the effects below.
                 <Transition fallback=|| ()>
                     {move || {
-                        let listed = scenes.get().unwrap_or_default();
+                        let listed = moods.get().unwrap_or_default();
                         if listed.is_empty() {
                             return Either::Left(
                                 view! {
                                     <p class="empty">
                                         "None yet: Home Assistant lists them on "
-                                        <code>"flash-dance/scenes/set"</code> "."
+                                        <code>"flash-dance/moods/set"</code> "."
                                     </p>
                                 },
                             );
@@ -270,12 +270,12 @@ fn Console() -> impl IntoView {
                                             let name = s.name.clone();
                                             let mine = name.clone();
                                             let current = move || {
-                                                scene().as_deref() == Some(mine.as_str())
+                                                mood().as_deref() == Some(mine.as_str())
                                             };
                                             view! {
                                                 <li style=format!("--rgb: rgb({r} {g} {b})")>
                                                     <button
-                                                        class="card scene"
+                                                        class="card mood"
                                                         class:running=current
                                                         on:click=move |_| {
                                                             press.dispatch(name.clone());
@@ -295,7 +295,7 @@ fn Console() -> impl IntoView {
                 </Transition>
             </Show>
 
-            <Show when=move || !on_scenes.get()>
+            <Show when=move || !on_moods.get()>
             // A Transition, not a Suspense: every card reads the status the page
             // polls, and a Suspense falls back to this placeholder on *every* reload
             // of what it reads — which tore down and rebuilt the whole grid once a
@@ -411,11 +411,11 @@ fn StatusBar(
             <Transition fallback=|| view! { <span class="dot idle"></span> }>
                 {move || {
                     let status = status.get().unwrap_or_default();
-                    let running = matches!(status, Status::Running(_) | Status::Scene(_));
+                    let running = matches!(status, Status::Running(_) | Status::Mood(_));
                     let (class, text) = match &status {
                         Status::Idle => ("idle", "Nothing running.".to_string()),
                         Status::Running(effect) => ("live", format!("Running {effect}.")),
-                        Status::Scene(name) => ("live", format!("Scene {name}.")),
+                        Status::Mood(name) => ("live", format!("Mood {name}.")),
                         Status::Failed { effect, error } => {
                             ("failed", format!("{effect} stopped: {error}"))
                         }
