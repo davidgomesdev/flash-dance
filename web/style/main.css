@@ -272,22 +272,22 @@ header h1 em {
   border-color: var(--ink);
 }
 
-/* A scene's colour is Home Assistant's RGB, not a hue, and it has no `?`. */
-.card.scene {
+/* A mood's colour is Home Assistant's RGB, not a hue, and it has no `?`. */
+.card.mood {
   padding-right: 0.85rem;
 }
 
-.card.scene .swatch {
+.card.mood .swatch {
   background: var(--rgb);
   box-shadow: 0 0 1.2rem -0.2rem var(--rgb);
 }
 
-.cards li:hover .card.scene,
-.card.scene.running {
+.cards li:hover .card.mood,
+.card.mood.running {
   border-color: var(--rgb);
 }
 
-.card.scene.running {
+.card.mood.running {
   background: color-mix(in srgb, var(--rgb) 14%, var(--raised));
 }
 

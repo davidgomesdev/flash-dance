@@ -1,17 +1,17 @@
-# The Launchpad's Session button, filled from Home Assistant's own UI: scenes and
-# scripts picked from a list, and playlists that run one party script with their
-# playlist and effect. A pad pressed (on the device or the website) runs its own.
+# The Launchpad's moods, on its Session button, filled from Home Assistant's own
+# UI: scenes and scripts picked from a list, and playlists that run one mood script
+# with their playlist and effect. A pad pressed (on the device or the website) runs its own.
 #
 # Install: copy this file to config/blueprints/automation/flash-dance/ and reload
-# automations, then Settings → Automations → Blueprints → Launchpad scenes.
+# automations, then Settings → Automations → Blueprints → Launchpad moods.
 blueprint:
-  name: Launchpad scenes
+  name: Launchpad moods
   description: >-
-    Puts scenes, scripts and playlists on the Launchpad's Session button, and runs
-    the one pressed. Scenes and scripts come first, from the top left, named after
+    Puts moods on the Launchpad's Session button: scenes, scripts and playlists.
+    Runs the one pressed. Scenes and scripts come first, from the top left, named after
     the entity; then the playlists, each where its `row` says or after the last pad.
   domain: automation
-  source_url: https://github.com/davidgomesdev/flash-dance/blob/main/home-assistant/launchpad_scenes.yaml
+  source_url: https://github.com/davidgomesdev/flash-dance/blob/main/home-assistant/launchpad_moods.yaml
   input:
     targets:
       name: Scenes and scripts
@@ -22,8 +22,8 @@ blueprint:
           multiple: true
           filter:
             - domain: [scene, script]
-    party_script:
-      name: Party script
+    mood_script:
+      name: Mood script
       description: >-
         Run for a playlist pad, with the variables `playlist` and `effect` (empty
         when the pad has none).
@@ -57,14 +57,14 @@ triggers:
     event_type: automation_reloaded
     id: list
   - trigger: state
-    entity_id: event.launchpad_scene
+    entity_id: event.launchpad_mood
     not_from: [unavailable, unknown]
     not_to: [unavailable, unknown]
     id: press
 
 variables:
   targets: !input targets
-  party_script: !input party_script
+  mood_script: !input mood_script
   playlists: !input playlists
   # Eight hues, cycling: the same rainbow the effect picker has, near enough.
   palette:
@@ -85,7 +85,7 @@ actions:
         sequence:
           - action: mqtt.publish
             data:
-              topic: flash-dance/scenes/set
+              topic: flash-dance/moods/set
               retain: true
               # `rows` counts the pads used on each row, which is where the next
               # pad on it goes; `y` is the row the last pad went on.
@@ -147,11 +147,11 @@ actions:
                   - action: homeassistant.turn_on
                     target:
                       entity_id: "{{ entity }}"
-              - conditions: "{{ playlist != '' and party_script != '' }}"
+              - conditions: "{{ playlist != '' and mood_script != '' }}"
                 sequence:
                   - action: script.turn_on
                     target:
-                      entity_id: "{{ party_script }}"
+                      entity_id: "{{ mood_script }}"
                     data:
                       variables:
                         playlist: "{{ playlist }}"

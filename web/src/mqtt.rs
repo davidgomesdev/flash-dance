@@ -5,12 +5,12 @@
 //! - a **select** for the audio source the sound effects listen to;
 //! - an **event** entity, `event.launchpad_pad`, firing on every grid press and
 //!   release with its `x`, `y` and velocity;
-//! - an **event** entity, `event.launchpad_scene`, firing with a scene's name as its
-//!   event type when Session's scene pad is pressed.
+//! - an **event** entity, `event.launchpad_mood`, firing with a mood's name as its
+//!   event type when Session's mood pad is pressed.
 //!
-//! HA lists the scenes, retained, on [`SCENES_SET`]: `[{"pad": [x, y], "name": …,
-//! "rgb": [r, g, b]}]`. Their names are the scene entity's event types, so a new
-//! list re-announces the device. A scene pressed stops the effect, and the light
+//! HA lists the moods, retained, on [`MOODS_SET`]: `[{"pad": [x, y], "name": …,
+//! "rgb": [r, g, b]}]`. Their names are the mood entity's event types, so a new
+//! list re-announces the device. A mood pressed stops the effect, and the light
 //! says so: on, with a `null` effect.
 //!
 //! HA colours the panel by publishing `{"pad": [x, y], "rgb": [r, g, b]}` (or a
@@ -26,7 +26,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use flash_dance::Event;
-use flash_dance_effects::{Report, Scene};
+use flash_dance_effects::{Mood, Report};
 use rumqttc::{AsyncClient, Event as Mqtt, LastWill, MqttOptions, Outgoing, Packet, QoS};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -41,8 +41,8 @@ const SOURCE_SET: &str = "flash-dance/source/set";
 const SOURCE_STATE: &str = "flash-dance/source/state";
 const PAD: &str = "flash-dance/pad";
 const GRID: &str = "flash-dance/grid/set";
-const SCENES_SET: &str = "flash-dance/scenes/set";
-const SCENE: &str = "flash-dance/scene";
+const MOODS_SET: &str = "flash-dance/moods/set";
+const MOOD: &str = "flash-dance/mood";
 const DISCOVERY: &str = "homeassistant/device/flash_dance/config";
 /// HA's birth message: `online` here means it has (re)started and wants discovery again.
 const HA_STATUS: &str = "homeassistant/status";
@@ -98,7 +98,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
     let mut rescan = tokio::time::interval(Duration::from_secs(30));
     let mut sources: Vec<String> = Vec::new();
     let mut source = String::new();
-    let mut scenes: Vec<String> = Vec::new();
+    let mut moods: Vec<String> = Vec::new();
     // The effect "on" comes back to when HA sends no effect with it: whatever was
     // showing last, picked from HA, the website or the device's own picker.
     let mut last = runner::effects()[0].name.clone();
@@ -112,10 +112,10 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     println!("mqtt: connected");
                     // A fresh session every time, so subscriptions do not survive a
                     // reconnect and are made again here.
-                    for topic in [LIGHT_SET, SOURCE_SET, GRID, SCENES_SET, HA_STATUS] {
+                    for topic in [LIGHT_SET, SOURCE_SET, GRID, MOODS_SET, HA_STATUS] {
                         let _ = client.try_subscribe(topic, QoS::AtLeastOnce);
                     }
-                    announce(&client, &sources, &source, &scenes);
+                    announce(&client, &sources, &source, &moods);
                     published = None;
                 }
                 Ok(Mqtt::Incoming(Packet::Publish(message))) => {
@@ -146,16 +146,16 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                             publish(&client, SOURCE_STATE, true, source.clone());
                         }
                         Some(Command::Paint(pads)) => runner::paint(&pads),
-                        Some(Command::Scenes(list)) => {
+                        Some(Command::Moods(list)) => {
                             let names = event_types(&list);
-                            runner::set_scenes(list);
-                            if names != scenes {
-                                scenes = names;
-                                announce(&client, &sources, &source, &scenes);
+                            runner::set_moods(list);
+                            if names != moods {
+                                moods = names;
+                                announce(&client, &sources, &source, &moods);
                             }
                         }
                         Some(Command::Announce) => {
-                            announce(&client, &sources, &source, &scenes);
+                            announce(&client, &sources, &source, &moods);
                             published = None;
                         }
                         Some(Command::Source(_)) | None => {
@@ -176,8 +176,8 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                         publish(&client, PAD, false, payload.to_string());
                     }
                 }
-                Report::Scene(name) => {
-                    publish(&client, SCENE, false, json!({"event_type": name}).to_string());
+                Report::Mood(name) => {
+                    publish(&client, MOOD, false, json!({"event_type": name}).to_string());
                 }
                 Report::Showing(_) => {}
             },
@@ -191,7 +191,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     if !sources.contains(&source) {
                         source = sources.first().cloned().unwrap_or_default();
                     }
-                    announce(&client, &sources, &source, &scenes);
+                    announce(&client, &sources, &source, &moods);
                 }
             }
             _ = tick.tick() => {
@@ -240,13 +240,13 @@ fn publish(client: &AsyncClient, topic: &str, retain: bool, payload: String) {
 }
 
 /// Everything HA needs to (re)build the device, and the Pi's cue for it to repaint.
-fn announce(client: &AsyncClient, sources: &[String], source: &str, scenes: &[String]) {
+fn announce(client: &AsyncClient, sources: &[String], source: &str, moods: &[String]) {
     let names: Vec<String> = runner::effects().into_iter().map(|e| e.name).collect();
     publish(
         client,
         DISCOVERY,
         true,
-        discovery(&names, sources, scenes).to_string(),
+        discovery(&names, sources, moods).to_string(),
     );
     publish(client, AVAILABILITY, true, "online".to_string());
     if !source.is_empty() {
@@ -261,7 +261,7 @@ enum Command {
     Off,
     Source(String),
     Paint(Vec<(usize, usize, [u8; 3])>),
-    Scenes(Vec<Scene>),
+    Moods(Vec<Mood>),
     /// HA restarted and has forgotten the device.
     Announce,
 }
@@ -289,15 +289,15 @@ fn command(topic: &str, payload: &[u8]) -> Option<Command> {
                 .collect::<Option<_>>()
                 .map(Command::Paint)
         }
-        SCENES_SET => {
+        MOODS_SET => {
             let value: Value = serde_json::from_slice(payload).ok()?;
-            // Like the grid: one bad scene spoils the list.
+            // Like the grid: one bad mood spoils the list.
             value
                 .as_array()?
                 .iter()
-                .map(scene)
+                .map(mood)
                 .collect::<Option<_>>()
-                .map(Command::Scenes)
+                .map(Command::Moods)
         }
         HA_STATUS => (payload == b"online").then_some(Command::Announce),
         _ => None,
@@ -319,7 +319,7 @@ fn pad_colour(value: &Value) -> Option<(usize, usize, [u8; 3])> {
     ))
 }
 
-fn scene(value: &Value) -> Option<Scene> {
+fn mood(value: &Value) -> Option<Mood> {
     let byte = |v: &Value| v.as_u64().filter(|&c| c <= 255).map(|c| c as u8);
     let on_grid = |v: &Value| v.as_u64().filter(|&c| c < 8).map(|c| c as u8);
     let [x, y] = value["pad"].as_array()?.as_slice() else {
@@ -329,7 +329,7 @@ fn scene(value: &Value) -> Option<Scene> {
         return None;
     };
     let name = value["name"].as_str().filter(|n| !n.is_empty())?;
-    Some(Scene {
+    Some(Mood {
         x: on_grid(x)?,
         y: on_grid(y)?,
         name: name.to_string(),
@@ -337,12 +337,12 @@ fn scene(value: &Value) -> Option<Scene> {
     })
 }
 
-/// The scene entity's event types: each name once, in the order HA listed them.
-fn event_types(scenes: &[Scene]) -> Vec<String> {
+/// The mood entity's event types: each name once, in the order HA listed them.
+fn event_types(moods: &[Mood]) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    for scene in scenes {
-        if !names.contains(&scene.name) {
-            names.push(scene.name.clone());
+    for mood in moods {
+        if !names.contains(&mood.name) {
+            names.push(mood.name.clone());
         }
     }
     names
@@ -363,7 +363,7 @@ fn press(event: Event) -> Option<Value> {
 fn light_state(status: &Status) -> Value {
     match status {
         // `null`, not left out: HA keeps the last effect when the key is missing.
-        Status::Scene(_) => {
+        Status::Mood(_) => {
             json!({"state": "ON", "effect": null, "color_mode": "onoff"})
         }
         Status::Running(effect) => json!({"state": "ON", "effect": effect, "color_mode": "onoff"}),
@@ -372,9 +372,9 @@ fn light_state(status: &Status) -> Value {
 }
 
 /// HA's device discovery: one message for the device and all its entities.
-/// `sources` empty (no sound server) leaves the select out, `scenes` empty the
-/// scene entity.
-fn discovery(effects: &[String], sources: &[String], scenes: &[String]) -> Value {
+/// `sources` empty (no sound server) leaves the select out, `moods` empty the
+/// mood entity.
+fn discovery(effects: &[String], sources: &[String], moods: &[String]) -> Value {
     let mut effect_list: Vec<&str> = effects.iter().map(String::as_str).collect();
     effect_list.push(PANEL);
     let mut components = json!({
@@ -407,13 +407,13 @@ fn discovery(effects: &[String], sources: &[String], scenes: &[String]) -> Value
             "options": sources,
         });
     }
-    if !scenes.is_empty() {
-        components["scene"] = json!({
+    if !moods.is_empty() {
+        components["mood"] = json!({
             "platform": "event",
-            "unique_id": "flash_dance_scene",
-            "name": "Scene",
-            "state_topic": SCENE,
-            "event_types": scenes,
+            "unique_id": "flash_dance_mood",
+            "name": "Mood",
+            "state_topic": MOOD,
+            "event_types": moods,
         });
     }
     json!({
@@ -508,15 +508,15 @@ mod tests {
         assert_eq!(list.last().unwrap(), PANEL);
         assert!(effects.iter().all(|e| e != PANEL));
         assert!(config["components"].get("source").is_none());
-        assert!(config["components"].get("scene").is_none());
+        assert!(config["components"].get("mood").is_none());
         let full = discovery(&effects, &["mic".into()], &["Party".into()]);
         assert!(full["components"]["source"].is_object());
-        assert_eq!(full["components"]["scene"]["event_types"], json!(["Party"]));
+        assert_eq!(full["components"]["mood"]["event_types"], json!(["Party"]));
     }
 
     #[test]
-    fn scenes_need_a_grid_pad_a_name_and_a_colour() {
-        let party = Scene {
+    fn moods_need_a_grid_pad_a_name_and_a_colour() {
+        let party = Mood {
             x: 1,
             y: 7,
             name: "Party".into(),
@@ -524,22 +524,22 @@ mod tests {
         };
         assert_eq!(
             command(
-                SCENES_SET,
+                MOODS_SET,
                 br#"[{"pad":[1,7],"name":"Party","rgb":[255,0,128]}]"#
             ),
-            Some(Command::Scenes(vec![party.clone()]))
+            Some(Command::Moods(vec![party.clone()]))
         );
-        assert_eq!(command(SCENES_SET, b"[]"), Some(Command::Scenes(vec![])));
+        assert_eq!(command(MOODS_SET, b"[]"), Some(Command::Moods(vec![])));
         assert_eq!(
-            command(SCENES_SET, br#"[{"pad":[8,0],"name":"x","rgb":[0,0,0]}]"#),
+            command(MOODS_SET, br#"[{"pad":[8,0],"name":"x","rgb":[0,0,0]}]"#),
             None
         );
         assert_eq!(
-            command(SCENES_SET, br#"[{"pad":[0,0],"name":"","rgb":[0,0,0]}]"#),
+            command(MOODS_SET, br#"[{"pad":[0,0],"name":"","rgb":[0,0,0]}]"#),
             None
         );
         assert_eq!(
-            command(SCENES_SET, br#"{"pad":[0,0],"name":"x","rgb":[0,0,0]}"#),
+            command(MOODS_SET, br#"{"pad":[0,0],"name":"x","rgb":[0,0,0]}"#),
             None
         );
         assert_eq!(
@@ -549,9 +549,9 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_turns_the_effect_off_explicitly() {
+    fn a_mood_turns_the_effect_off_explicitly() {
         assert_eq!(
-            light_state(&Status::Scene("Party".into())),
+            light_state(&Status::Mood("Party".into())),
             json!({"state": "ON", "effect": null, "color_mode": "onoff"})
         );
     }
