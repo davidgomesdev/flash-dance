@@ -107,28 +107,57 @@ connects; trigger on that to repaint everything after a restart.
 ### Scenes
 
 **Session** (top row, fifth button) swaps the grid for scene pads; **User** still
-opens the effect picker. Home Assistant lists the scenes by publishing, **retained**,
-to `flash-dance/scenes/set` (an empty list removes them):
+opens the effect picker. The website has the same two, as **Scenes** and
+**Effects**, and pressing a scene there is pressing it on the device (starting a
+session first if none is running). Pressing a scene stops the effect — the light
+stays on with no effect — pulses its pad for 5 s and fires `event.launchpad_scene`
+with the scene's name as the event type.
+
+**The easy way:** the [Launchpad scenes](home-assistant/launchpad_scenes.yaml)
+blueprint. Copy it to `config/blueprints/automation/flash-dance/`, reload
+automations, and make an automation from it: pick scenes and scripts, and each gets
+a pad, in order from the top left, named after the entity, in a rainbow. A pad
+pressed runs its scene or script.
+
+A scene sets how things look; a script runs steps, which is what playing music
+needs. A Party script, with the [Spotify](https://www.home-assistant.io/integrations/spotify/)
+integration (Premium only, and the speaker must already be one Spotify knows):
+
+```yaml
+alias: Party
+sequence:
+  - action: media_player.select_source
+    target: {entity_id: media_player.spotify}
+    data: {source: Living room}
+  - action: media_player.play_media
+    target: {entity_id: media_player.spotify}
+    data:
+      media_content_id: spotify:playlist:37i9dQZF1DXaXB8fQg7xif
+      media_content_type: playlist
+  - action: light.turn_on
+    target: {entity_id: light.launchpad}
+    data: {effect: spectrum}
+```
+
+**By hand:** publish the list, **retained**, to `flash-dance/scenes/set` (an empty
+list removes them), and trigger on the event entity. Trigger on its state, not on
+its `event_type` attribute: pressing the same scene twice changes only the state.
 
 ```json
 [{"pad": [0, 0], "name": "Party", "rgb": [255, 0, 128]}]
 ```
 
-Pressing a scene stops the effect — the light stays on with no effect — pulses the
-pad for 5 s and fires `event.launchpad_scene` with the scene's name as the event
-type, so an automation can trigger on it and do anything, setting an effect on
-the light included. The website has the scenes under **Scenes**, next to **Effects**, as the device has them under Session and User; pressing one there is pressing it on the device, starting a session first if none is running:
-
 ```yaml
 triggers:
   - trigger: state
     entity_id: event.launchpad_scene
+conditions:
+  - condition: state
+    entity_id: event.launchpad_scene
     attribute: event_type
-    to: Party
+    state: Party
 actions:
-  - action: scene.turn_on
-    target:
-      entity_id: scene.party
+  - action: script.party
 ```
 
 ## Listening
