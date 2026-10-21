@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use flash_dance_effects::{EFFECTS, Picture, Report, Scene};
+use flash_dance_effects::{EFFECTS, Picture, Report, Scene, Scenes};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::app::{EffectInfo, SceneInfo, SourceInfo, Status};
@@ -21,8 +21,9 @@ pub const PANEL: &str = "panel";
 /// or not the panel is running, so switching to it shows the latest picture at once.
 static PICTURE: Mutex<Picture> = Mutex::new([[[0; 3]; 8]; 8]);
 
-/// What Session shows. Set from outside like [`PICTURE`], and read by every session.
-static SCENE_LIST: Mutex<Vec<Scene>> = Mutex::new(Vec::new());
+/// What Session shows, and a scene pressed on the website. Set from outside like
+/// [`PICTURE`], and read by every session.
+static SCENES: Mutex<Scenes> = Mutex::new(Scenes::new());
 
 /// Who hears the button events and scene presses of whatever session is running.
 static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
@@ -65,7 +66,7 @@ pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
 
 /// Replaces the scenes Session shows; a running session shows the new list at once.
 pub fn set_scenes(scenes: Vec<Scene>) {
-    *lock(&SCENE_LIST) = scenes;
+    lock(&SCENES).list = scenes;
 }
 
 /// Every button event and scene press from now on, from every session, as
@@ -79,7 +80,8 @@ pub fn listen() -> UnboundedReceiver<Report> {
 
 /// The scenes Session shows, in the order Home Assistant listed them.
 pub fn scenes() -> Vec<SceneInfo> {
-    lock(&SCENE_LIST)
+    lock(&SCENES)
+        .list
         .iter()
         .map(|scene| SceneInfo {
             name: scene.name.clone(),
@@ -130,6 +132,8 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
 
     let mut running = running();
     halt(&mut running);
+    // A press meant for the session just stopped is not one for this.
+    lock(&SCENES).pressed = None;
 
     let stop = Arc::new(AtomicBool::new(false));
     let showing = Arc::new(Mutex::new(Status::Running(
@@ -153,9 +157,9 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         .spawn(move || {
             match effect {
                 Some(effect) => {
-                    flash_dance_effects::run(effect, source.as_deref(), &SCENE_LIST, &flag, report)
+                    flash_dance_effects::run(effect, source.as_deref(), &SCENES, &flag, report)
                 }
-                None => flash_dance_effects::panel(&PICTURE, &SCENE_LIST, &flag, report),
+                None => flash_dance_effects::panel(&PICTURE, &SCENES, &flag, report),
             }
             .map_err(|e| e.to_string())
         })
@@ -166,6 +170,19 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         thread,
     });
     Ok(state(&mut running))
+}
+
+/// Presses a scene as if on the device, starting a session on the first effect if
+/// none is running: the session is what shows it, and what tells Home Assistant.
+pub fn press_scene(name: &str, source: Option<&str>) -> Result<Status, String> {
+    if !lock(&SCENES).list.iter().any(|s| s.name == name) {
+        return Err(format!("there is no scene called {name:?}"));
+    }
+    if !matches!(status(), Status::Running(_) | Status::Scene(_)) {
+        start(EFFECTS[0].name(), source)?;
+    }
+    lock(&SCENES).pressed = Some(name.to_string());
+    Ok(Status::Scene(name.to_string()))
 }
 
 pub fn stop() -> Status {

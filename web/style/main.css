@@ -240,11 +240,41 @@ header h1 em {
   animation: breathe 1.6s ease-in-out infinite;
 }
 
-/* A scene's colour is Home Assistant's RGB, not a hue, and the card is not a
-   button: scenes are pressed on the device. */
+/* The device's two modes, one at a time like on the device. */
+.modes {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.modes button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.6rem 1.1rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--dim);
+  background: none;
+  border: 1px solid var(--edge);
+  border-radius: 0.75rem;
+  cursor: pointer;
+}
+
+.modes button small {
+  font-weight: 400;
+  font-size: 0.75rem;
+}
+
+.modes button.on {
+  color: var(--ink);
+  background: var(--raised);
+  border-color: var(--ink);
+}
+
+/* A scene's colour is Home Assistant's RGB, not a hue, and it has no `?`. */
 .card.scene {
   padding-right: 0.85rem;
-  cursor: default;
 }
 
 .card.scene .swatch {

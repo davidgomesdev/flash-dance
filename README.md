@@ -117,7 +117,7 @@ to `flash-dance/scenes/set` (an empty list removes them):
 Pressing a scene stops the effect — the light stays on with no effect — pulses the
 pad for 5 s and fires `event.launchpad_scene` with the scene's name as the event
 type, so an automation can trigger on it and do anything, setting an effect on
-the light included. The website lists the scenes and shows the one pressed last:
+the light included. The website has the scenes under **Scenes**, next to **Effects**, as the device has them under Session and User; pressing one there is pressing it on the device, starting a session first if none is running:
 
 ```yaml
 triggers:

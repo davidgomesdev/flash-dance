@@ -8,7 +8,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use flash_dance_effects::{EFFECTS, Effect, run};
+use flash_dance_effects::{EFFECTS, Effect, Scenes, run};
 
 /// The effect named on the command line, or the first. Decided before [`run`]
 /// opens the device, because a name that matches nothing exits the process — and
@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run(
         start,
         source.as_deref(),
-        &Mutex::new(Vec::new()),
+        &Mutex::new(Scenes::new()),
         &AtomicBool::new(false),
         |_| {},
     )
