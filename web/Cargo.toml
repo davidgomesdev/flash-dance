@@ -18,6 +18,8 @@ axum = { version = "0.8", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"], optional = true }
 rumqttc = { version = "0.25", default-features = false, optional = true }
 serde_json = { version = "1", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true }
 flash-dance = { workspace = true, optional = true }
 flash-dance-audio = { workspace = true, optional = true }
 flash-dance-effects = { workspace = true, optional = true }
@@ -39,6 +41,8 @@ ssr = [
     "dep:tokio",
     "dep:rumqttc",
     "dep:serde_json",
+    "dep:tracing",
+    "dep:tracing-subscriber",
     "dep:flash-dance",
     "dep:flash-dance-audio",
     "dep:flash-dance-effects",
