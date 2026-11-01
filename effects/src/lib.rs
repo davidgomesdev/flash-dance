@@ -31,14 +31,14 @@ use flash_dance::{Clock, Event, Grid, Launchpad, Light, Pad, Result, Rng, hsv};
 use flash_dance_audio::{Audio, Sound};
 
 mod font;
-use font::glyphs;
+use font::{Glyph, glyphs};
 
 const MENU: Pad = Pad(98); // top row, rightmost, "User"
 const SESSION: Pad = Pad(95); // top row, fifth, "Session"
 const FPS: f64 = 30.0;
 /// Seconds a pressed mood pulses: long enough to see it took, short enough not to nag.
 const GLOW: f32 = 5.0;
-/// Marquee columns per (virtual) second: a letter and its gap is six columns.
+/// Marquee columns per (virtual) second: a letter and its gap is four columns.
 const SCROLL: f32 = 10.0;
 
 fn quit_button() -> Pad {
@@ -583,21 +583,26 @@ impl App {
 
     /// `text` coming in from the right, `elapsed` seconds after it started, a hue
     /// per letter. False once its last column has gone off the left edge.
-    fn marquee(&mut self, text: &[[u8; 7]], elapsed: f32) -> bool {
+    fn marquee(&mut self, text: &[Glyph], elapsed: f32) -> bool {
+        const STEP: usize = font::WIDTH + 1; // a letter and the gap after it
+        // The letters sit a row down from the top, in the middle of the grid.
+        const TOP: i32 = 1;
         self.grid.clear();
         // Whole columns: half a pad lit is a blur, not a position.
         let shift = (elapsed * SCROLL) as i32;
         for (i, glyph) in text.iter().enumerate() {
             for (y, row) in glyph.iter().enumerate() {
-                for column in 0..5 {
-                    if row >> (4 - column) & 1 == 1 {
-                        let x = 8 + (i * 6 + column) as i32 - shift;
-                        self.grid.set(x, y as i32, hsv(i as f32 * 0.13, 1.0, 1.0));
+                for column in 0..font::WIDTH {
+                    if row >> (font::WIDTH - 1 - column) & 1 == 1 {
+                        let x = 8 + (i * STEP + column) as i32 - shift;
+                        self.grid
+                            .set(x, TOP + y as i32, hsv(i as f32 * 0.13, 1.0, 1.0));
                     }
                 }
             }
         }
-        8 + text.len() as i32 * 6 - 2 - shift >= 0
+        // The last letter's last column, gone off the left edge.
+        8 + (text.len() * STEP) as i32 - 2 - shift >= 0
     }
 }
 
@@ -857,7 +862,7 @@ pub fn run(
     let mut moods = MoodMode::new(moods);
     // The marquee's letters and the virtual time it started; anything the device
     // switches to — picker, Session, a mood — cuts it short.
-    let mut scrolling: Option<(Vec<[u8; 7]>, f32)> = None;
+    let mut scrolling: Option<(Vec<Glyph>, f32)> = None;
     // Grid pads pressed in the picker or among the moods, so their releases stay
     // unreported too.
     let mut picked: Vec<Pad> = Vec::new();
@@ -1150,15 +1155,15 @@ mod tests {
         let text = glyphs("Hi");
         assert!(app.marquee(&text, 0.0));
         assert_eq!(lit(&app), 0, "starts just off the right edge");
-        // Eight columns in, the H fills the left five.
+        // Eight columns in, both letters are on the grid at once, a row down.
         assert!(app.marquee(&text, 8.0 / SCROLL));
-        assert!(app.grid.get(0, 0) != [0.0; 3] && app.grid.get(4, 3) != [0.0; 3]);
-        // The I's last lit column is the tenth; its eleventh is blank, and leaves
-        // after 8 + 10 + 1 columns.
-        assert!(app.marquee(&text, 17.0 / SCROLL));
-        assert!(lit(&app) > 0);
-        assert!(app.marquee(&text, 18.0 / SCROLL));
-        assert!(!app.marquee(&text, 19.0 / SCROLL));
+        assert!(app.grid.get(0, 1) != [0.0; 3], "H");
+        assert!(app.grid.get(4, 1) != [0.0; 3], "I");
+        assert_eq!(app.grid.get(0, 0), [0.0; 3]);
+        // The I's last column, the seventh, is on the left edge, then gone.
+        assert!(app.marquee(&text, 14.0 / SCROLL));
+        assert!(app.grid.get(0, 1) != [0.0; 3]);
+        assert!(!app.marquee(&text, 15.0 / SCROLL));
         assert_eq!(lit(&app), 0);
     }
 
