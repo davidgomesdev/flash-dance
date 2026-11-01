@@ -215,8 +215,8 @@ impl Audio {
             let mut buf = [0u8; 512];
             while out.read_exact(&mut buf).is_ok() {
                 let mut ring = sink.lock().unwrap_or_else(|e| e.into_inner());
-                for sample in buf.chunks_exact(2) {
-                    ring.push(i16::from_le_bytes([sample[0], sample[1]]) as f32 / 32768.0);
+                for &sample in buf.as_chunks::<2>().0 {
+                    ring.push(i16::from_le_bytes(sample) as f32 / 32768.0);
                 }
             }
         });
