@@ -54,7 +54,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-14, label: aarch64-apple-darwin }
+          - { os: macos-26, label: aarch64-apple-darwin }
           # ponytail: native arm runner, no ALSA cross-compile. Private repos need
           # a paid plan for it; swap to ubuntu-latest + cross if that bites.
           # Two Linux builds: glibc 2.35 runs on Debian 12 / Raspberry Pi OS bookworm
