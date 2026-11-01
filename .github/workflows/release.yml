@@ -54,10 +54,13 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, label: aarch64-apple-darwin }
           # ponytail: native arm runner, no ALSA cross-compile. Private repos need
           # a paid plan for it; swap to ubuntu-latest + cross if that bites.
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          # Two Linux builds: glibc 2.35 runs on Debian 12 / Raspberry Pi OS bookworm
+          # (glibc 2.36); glibc 2.39 is for newer distros.
+          - { os: ubuntu-22.04-arm, label: aarch64-linux-glibc2.35 }
+          - { os: ubuntu-24.04-arm, label: aarch64-linux-glibc2.39 }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -80,7 +83,7 @@ jobs:
           cargo leptos build --release
       - name: Package
         run: |
-          name=flash-dance-${{ needs.version.outputs.tag }}-${{ matrix.target }}
+          name=flash-dance-${{ needs.version.outputs.tag }}-${{ matrix.label }}
           mkdir -p "$name/bin"
           for b in effects paint palette whack simon snake life flash-dance-web; do
             cp "target/release/$b" "$name/bin/"
@@ -89,7 +92,7 @@ jobs:
           tar czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v7
         with:
-          name: flash-dance-${{ matrix.target }}
+          name: flash-dance-${{ matrix.label }}
           path: flash-dance-*.tar.gz
           if-no-files-found: error
 
