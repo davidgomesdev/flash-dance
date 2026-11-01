@@ -3,7 +3,7 @@ name: release
 on:
   push:
     branches: [main]
-  # On main: same as a push. On any other branch: a draft release of that branch.
+  # On main: same as a push. On any other branch: a public prerelease of that branch.
   workflow_dispatch:
 
 permissions:
@@ -31,7 +31,7 @@ jobs:
             @semantic-release/git
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # main: v<next>. Other branches: v<next>+<n>, n counting that version's drafts so far.
+      # main: v<next>. Other branches: v<next>+<n>, n counting that version's releases so far.
       # ponytail: no commit warrants a bump -> falls back to the latest tag's version.
       - id: tag
         env:
