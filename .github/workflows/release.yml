@@ -3,6 +3,8 @@ name: release
 on:
   push:
     branches: [main]
+  # On main: same as a push. On any other branch: a draft release of that branch.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,18 +13,35 @@ jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
-      published: ${{ steps.sr.outputs.new_release_published }}
-      tag: v${{ steps.sr.outputs.new_release_version }}
+      published: ${{ steps.sr.outputs.new_release_published || steps.draft.outputs.published }}
+      tag: ${{ steps.sr.outputs.new_release_version && format('v{0}', steps.sr.outputs.new_release_version) || steps.draft.outputs.tag }}
+      # Built commit: the tag for a real release (it holds the version bump), the branch head for a draft.
+      ref: ${{ steps.sr.outputs.new_release_version && format('v{0}', steps.sr.outputs.new_release_version) || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # Reads conventional commits since the last tag, tags and creates the
-      # GitHub release. Does nothing if no commit warrants a release.
+      # Reads conventional commits since the last tag, bumps the Cargo versions,
+      # tags and creates the GitHub release. Does nothing if no commit warrants one.
       - id: sr
+        if: github.ref == 'refs/heads/main'
         uses: cycjimmy/semantic-release-action@v4
+        with:
+          extra_plugins: |
+            @semantic-release/exec
+            @semantic-release/git
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ponytail: draft tag is branch+sha, no version bump; add if drafts need real versions.
+      - id: draft
+        if: github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="draft-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"
+          gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" --title "$tag" --generate-notes
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -38,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown

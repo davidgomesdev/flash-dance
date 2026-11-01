@@ -3,6 +3,18 @@
   "plugins": [
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "find . -name Cargo.toml -not -path './target/*' -exec perl -0pi -e 's/^version = \".*?\"/version = \"${nextRelease.version}\"/m' {} + && cargo metadata --format-version 1 > /dev/null"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["Cargo.lock", "**/Cargo.toml"]
+      }
+    ],
     "@semantic-release/github"
   ]
 }
