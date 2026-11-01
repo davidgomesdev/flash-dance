@@ -37,8 +37,7 @@ blueprint:
       name: Playlists
       description: >-
         One per pad. A row (1 is the top) puts the pad after what is on that row
-        already; without one it goes after the pad before it. No colour is white. No
-        effect is the panel.
+        already; without one it goes after the pad before it. No colour is white.
       default: []
       selector:
         object:
