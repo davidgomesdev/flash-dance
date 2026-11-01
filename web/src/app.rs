@@ -90,8 +90,7 @@ pub async fn start_effect(effect: String, source: String) -> Result<Status, Serv
     crate::runner::start(&effect, Some(source.as_str())).map_err(ServerFnError::new)
 }
 
-/// Scrolls `text` once, then `effect` if given, else what was showing. No page
-/// uses it yet; it is the HTTP way in, beside MQTT.
+/// Scrolls `text` once, then `effect` if given, else what was showing.
 #[server]
 pub async fn show_marquee(
     text: String,
@@ -166,6 +165,14 @@ fn Console() -> impl IntoView {
         async move { press_mood(mood, source).await }
     });
     let stop = Action::new(|(): &()| async { stop_effect().await });
+    let (text, set_text) = signal(String::new());
+    // Empty is "whatever was showing", the server's default.
+    let (then, set_then) = signal(String::new());
+    let marquee = Action::new(move |(): &()| {
+        let then = Some(then.get_untracked()).filter(|t| !t.is_empty());
+        let (text, source) = (text.get_untracked(), source.get_untracked());
+        async move { show_marquee(text, then, source).await }
+    });
     // Which of the device's two modes the page shows, as User and Session do there.
     let (on_moods, set_on_moods) = signal(false);
 
@@ -176,6 +183,7 @@ fn Console() -> impl IntoView {
             start.version().get(),
             press.version().get(),
             stop.version().get(),
+            marquee.version().get(),
         );
         let _ = versions;
         status.refetch();
@@ -242,6 +250,46 @@ fn Console() -> impl IntoView {
                     <strong>"Stop/Solo/Mute"</strong>
                     " quits."
                 </p>
+                <form
+                    class="marquee"
+                    on:submit=move |ev| {
+                        ev.prevent_default();
+                        marquee.dispatch(());
+                    }
+                >
+                    <label for="marquee">"Scroll"</label>
+                    <input
+                        id="marquee"
+                        type="text"
+                        placeholder="a message"
+                        prop:value=text
+                        on:input:target=move |ev| set_text.set(ev.target().value())
+                    />
+                    <label for="then">"then"</label>
+                    <Suspense fallback=|| {
+                        view! { <select id="then" disabled><option>"…"</option></select> }
+                    }>
+                        {move || Suspend::new(async move {
+                            let listed = effects.await.unwrap_or_default();
+                            view! {
+                                <select
+                                    id="then"
+                                    on:change:target=move |ev| set_then.set(ev.target().value())
+                                >
+                                    <option value="">"what was showing"</option>
+                                    {listed
+                                        .into_iter()
+                                        // An option's value is its text.
+                                        .map(|effect| view! { <option>{effect.name}</option> })
+                                        .collect_view()}
+                                </select>
+                            }
+                        })}
+                    </Suspense>
+                    <button type="submit" disabled=move || text.get().trim().is_empty()>
+                        "Show"
+                    </button>
+                </form>
             </section>
 
             <nav class="modes">
