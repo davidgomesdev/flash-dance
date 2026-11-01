@@ -12,14 +12,7 @@ async fn main() {
         .ok()
         .and_then(|l| l.parse().ok())
         .unwrap_or(tracing::Level::DEBUG);
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(
-            tracing_subscriber::filter::Targets::new()
-                .with_target("flash_dance_web", level)
-                .with_default(tracing::Level::WARN),
-        )
-        .init();
+    let telemetry = telemetry(level);
 
     let config = get_configuration(None).expect("no leptos configuration");
     let options = config.leptos_options;
@@ -61,9 +54,81 @@ async fn main() {
             // leaves programmer mode before the process goes. A SIGKILL skips this
             // and leaves the device lit — nothing in-process can help with that.
             flash_dance_web::runner::stop();
+            telemetry.shutdown().await;
         })
         .await
         .expect("server failed");
+}
+
+/// Stdout always. `LOKI_URL` adds Loki, `OTLP_ENDPOINT` (gRPC, e.g. http://localhost:4317)
+/// adds traces. Both off when unset.
+#[cfg(feature = "ssr")]
+struct Telemetry {
+    loki: Option<(tracing_loki::BackgroundTaskController, tokio::task::JoinHandle<()>)>,
+    otel: Option<opentelemetry_sdk::trace::TracerProvider>,
+}
+
+#[cfg(feature = "ssr")]
+impl Telemetry {
+    async fn shutdown(self) {
+        if let Some(otel) = self.otel {
+            let _ = otel.shutdown();
+        }
+        if let Some((controller, task)) = self.loki {
+            controller.shutdown().await;
+            let _ = task.await;
+        }
+    }
+}
+
+#[cfg(feature = "ssr")]
+fn telemetry(level: tracing::Level) -> Telemetry {
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_otlp::WithExportConfig;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    // ponytail: no Loki reachability probe; the Loki task retries on its own.
+    let loki = std::env::var("LOKI_URL").ok().map(|url| {
+        tracing_loki::builder()
+            .label("service", "flash-dance")
+            .expect("bad Loki label")
+            .build_controller_url(url.parse().expect("invalid LOKI_URL"))
+            .expect("cannot build the Loki layer")
+    });
+    let otel = std::env::var("OTLP_ENDPOINT").ok().and_then(|endpoint| {
+        opentelemetry_otlp::new_pipeline()
+            .tracing()
+            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_endpoint(endpoint))
+            .with_trace_config(opentelemetry_sdk::trace::Config::default().with_resource(
+                opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                    "service.name",
+                    "flash-dance",
+                )]),
+            ))
+            .install_batch(opentelemetry_sdk::runtime::Tokio)
+            .inspect_err(|e| eprintln!("OTLP exporter failed: {e}; continuing without it"))
+            .ok()
+    });
+    let otel_layer = otel
+        .as_ref()
+        .map(|p| tracing_opentelemetry::layer().with_tracer(p.tracer("flash-dance")));
+    let (loki_layer, loki) = match loki {
+        Some((layer, controller, task)) => (Some(layer), Some((controller, tokio::spawn(task)))),
+        None => (None, None),
+    };
+
+    // The OTel layer goes first: it only implements Layer<Registry>.
+    tracing_subscriber::registry()
+        .with(otel_layer)
+        .with(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("flash_dance_web", level)
+                .with_default(tracing::Level::WARN),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .with(loki_layer)
+        .init();
+    Telemetry { loki, otel }
 }
 
 /// The wasm half of this crate has no `main`, but cargo still wants one.
