@@ -106,8 +106,7 @@ connects; trigger on that to repaint everything after a restart.
 
 To scroll a message across the grid, publish `{"text": "hello", "effect": "fire"}`
 to `flash-dance/marquee/set`. It scrolls once, right to left, and when its last
-letter has gone the grid shows `effect` (`panel` included) — or, without one, whatever was showing
-before. A running effect keeps its speed and brightness; with nothing running, a
+letter has gone the grid shows `effect` — or, without one, the panel. A running effect keeps its speed and brightness; with nothing running, a
 session starts. The website does the same from its **Scroll** box.
 
 ### Moods

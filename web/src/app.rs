@@ -90,7 +90,7 @@ pub async fn start_effect(effect: String, source: String) -> Result<Status, Serv
     crate::runner::start(&effect, Some(source.as_str())).map_err(ServerFnError::new)
 }
 
-/// Scrolls `text` once, then `effect` if given, else what was showing.
+/// Scrolls `text` once, then `effect` if given, else the panel.
 #[server]
 pub async fn show_marquee(
     text: String,
@@ -166,7 +166,7 @@ fn Console() -> impl IntoView {
     });
     let stop = Action::new(|(): &()| async { stop_effect().await });
     let (text, set_text) = signal(String::new());
-    // Empty is "whatever was showing", the server's default.
+    // Empty is the panel, the server's default.
     let (then, set_then) = signal(String::new());
     let marquee = Action::new(move |(): &()| {
         let then = Some(then.get_untracked()).filter(|t| !t.is_empty());
@@ -276,7 +276,7 @@ fn Console() -> impl IntoView {
                                     id="then"
                                     on:change:target=move |ev| set_then.set(ev.target().value())
                                 >
-                                    <option value="">"what was showing"</option>
+                                    <option value="">"the panel"</option>
                                     {listed
                                         .into_iter()
                                         // An option's value is its text.

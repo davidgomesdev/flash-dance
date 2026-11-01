@@ -20,7 +20,7 @@
 //! when the connection drops.
 //!
 //! `{"text": "hello", "effect": "fire"}` on [`MARQUEE_SET`] scrolls the text across
-//! once, then starts `effect` — or, without one, goes back to what was showing.
+//! once, then starts `effect` — or, without one, goes to the panel.
 //!
 //! Like the website, this only ever goes through [`runner`], so the one-session rule
 //! and the stop that lets `Drop` run hold here too.

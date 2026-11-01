@@ -190,7 +190,7 @@ actions:
                 {{ (p.playlist if p else '') or '' }}
               effect: >-
                 {% set p = playlists | selectattr('name', 'eq', name) | first %}
-                {{ (p.effect if p else '') or 'panel' }}
+                {{ (p.effect if p else '') or '' }}
           - choose:
               - conditions: "{{ entity != '' }}"
                 sequence:

@@ -205,14 +205,15 @@ pub fn press_mood(name: &str, source: Option<&str>) -> Result<Status, String> {
 }
 
 /// Scrolls `text` across the grid once, then shows the effect named `then` — or,
-/// without one, whatever was showing. The running effect session shows it, keeping
+/// without one, the panel. The running effect session shows it, keeping
 /// its speed and brightness; with none running (idle, the panel) one starts, on
 /// `then` or the first effect.
 pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<Status, String> {
     if text.trim().is_empty() {
         return Err("there is no text to scroll".to_string());
     }
-    let panel = then == Some(PANEL);
+    // No effect is the panel; it is what a mood leaves on.
+    let panel = matches!(then, None | Some(PANEL));
     let then = match then.filter(|_| !panel) {
         Some(name) => Some(
             EFFECTS
