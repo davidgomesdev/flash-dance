@@ -30,6 +30,9 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("cannot listen on {address}: {e}"));
     tracing::info!("flash-dance on http://{address}");
+    if let Err(e) = flash_dance_web::runner::start(flash_dance_web::runner::PANEL, None) {
+        tracing::warn!("cannot start the panel: {e}");
+    }
     let bridge = flash_dance_web::mqtt::options().map(|options| {
         let (stop, stopped) = tokio::sync::oneshot::channel();
         (
