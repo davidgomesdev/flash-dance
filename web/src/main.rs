@@ -5,7 +5,6 @@ async fn main() {
     use flash_dance_web::app::{App, shell};
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     // APP_LOG_LEVEL (default debug) for this crate, warn for everything else.
     let level = std::env::var("APP_LOG_LEVEL")
@@ -64,7 +63,10 @@ async fn main() {
 /// adds traces. Both off when unset.
 #[cfg(feature = "ssr")]
 struct Telemetry {
-    loki: Option<(tracing_loki::BackgroundTaskController, tokio::task::JoinHandle<()>)>,
+    loki: Option<(
+        tracing_loki::BackgroundTaskController,
+        tokio::task::JoinHandle<()>,
+    )>,
     otel: Option<opentelemetry_sdk::trace::TracerProvider>,
 }
 
@@ -98,7 +100,11 @@ fn telemetry(level: tracing::Level) -> Telemetry {
     let otel = std::env::var("OTLP_ENDPOINT").ok().and_then(|endpoint| {
         opentelemetry_otlp::new_pipeline()
             .tracing()
-            .with_exporter(opentelemetry_otlp::new_exporter().tonic().with_endpoint(endpoint))
+            .with_exporter(
+                opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .with_endpoint(endpoint),
+            )
             .with_trace_config(opentelemetry_sdk::trace::Config::default().with_resource(
                 opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
                     "service.name",
