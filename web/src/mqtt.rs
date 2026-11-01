@@ -422,6 +422,8 @@ fn discovery(effects: &[String], sources: &[String], moods: &[String]) -> Value 
             "name": "Launchpad",
             "manufacturer": "Novation",
             "model": "Launchpad Mini MK3",
+            // Bumped in Cargo.toml by the release workflow.
+            "sw_version": env!("CARGO_PKG_VERSION"),
         },
         "origin": {"name": "flash-dance", "url": "https://github.com/davidgomesdev/flash-dance"},
         "availability_topic": AVAILABILITY,
@@ -509,6 +511,7 @@ mod tests {
         assert!(effects.iter().all(|e| e != PANEL));
         assert!(config["components"].get("source").is_none());
         assert!(config["components"].get("mood").is_none());
+        assert_eq!(config["device"]["sw_version"], env!("CARGO_PKG_VERSION"));
         let full = discovery(&effects, &["mic".into()], &["Party".into()]);
         assert!(full["components"]["source"].is_object());
         assert_eq!(full["components"]["mood"]["event_types"], json!(["Party"]));
