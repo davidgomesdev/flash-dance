@@ -120,4 +120,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.version.outputs.tag }}
-        run: gh release create "$TAG" dist/*.tar.gz --draft --prerelease --target "$GITHUB_SHA" --title "$TAG ($GITHUB_REF_NAME)" --generate-notes
+        run: gh release create "$TAG" dist/*.tar.gz --prerelease --target "$GITHUB_SHA" --title "$TAG ($GITHUB_REF_NAME)" --generate-notes
