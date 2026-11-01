@@ -119,6 +119,8 @@ two, as **Moods** and **Effects**, and pressing a mood there is pressing it on t
 device (starting a session first if none is running). Pressing a mood stops the
 effect — the light stays on with no effect — pulses its pad for 5 s and fires
 `event.launchpad_mood` with the mood's name as the event type.
+A playlist mood from the blueprint also scrolls its name across the grid once,
+then shows its effect.
 
 **The easy way:** two blueprints, imported into Home Assistant from their links.
 

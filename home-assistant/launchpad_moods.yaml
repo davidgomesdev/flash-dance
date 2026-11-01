@@ -197,12 +197,22 @@ actions:
                   - action: homeassistant.turn_on
                     target:
                       entity_id: "{{ entity }}"
-              - conditions: "{{ playlist != '' and mood_script != '' }}"
+              - conditions: "{{ playlist != '' }}"
                 sequence:
-                  - action: script.turn_on
-                    target:
-                      entity_id: "{{ mood_script }}"
+                  # Scrolls the mood's name, then shows its effect: the marquee
+                  # does the switching, so the mood script is given no effect.
+                  # Left to set it too, it would restart the session mid-scroll.
+                  - action: mqtt.publish
                     data:
-                      variables:
-                        playlist: "{{ playlist }}"
-                        effect: "{{ effect }}"
+                      topic: flash-dance/marquee/set
+                      payload: >-
+                        {{ {'text': name} | combine({'effect': effect} if effect != '' else {}) | to_json }}
+                  - if: "{{ mood_script != '' }}"
+                    then:
+                      - action: script.turn_on
+                        target:
+                          entity_id: "{{ mood_script }}"
+                        data:
+                          variables:
+                            playlist: "{{ playlist }}"
+                            effect: ""
