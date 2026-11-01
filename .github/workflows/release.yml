@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.sr.outputs.new_release_published }}
+      tag: v${{ steps.sr.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Reads conventional commits since the last tag, tags and creates the
+      # GitHub release. Does nothing if no commit warrants a release.
+      - id: sr
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: version
+    if: needs.version.outputs.published == 'true'
+    strategy:
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          # ponytail: native arm runner, no ALSA cross-compile. Private repos need
+          # a paid plan for it; swap to ubuntu-latest + cross if that bites.
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-leptos
+      - name: Build
+        run: |
+          cargo build --release -p effects -p paint -p palette -p whack -p simon -p snake -p life
+          cargo leptos build --release
+      - name: Package
+        run: |
+          name=flash-dance-${{ needs.version.outputs.tag }}-${{ matrix.target }}
+          mkdir -p "$name/bin"
+          for b in effects paint palette whack simon snake life flash-dance-web; do
+            cp "target/release/$b" "$name/bin/"
+          done
+          cp -r target/site "$name/site"
+          tar czf "$name.tar.gz" "$name"
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.version.outputs.tag }}" flash-dance-*.tar.gz
