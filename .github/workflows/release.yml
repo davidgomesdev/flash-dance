@@ -18,14 +18,14 @@ jobs:
       # Built commit: the tag for a real release (it holds the version bump), the branch head for a draft.
       ref: ${{ steps.sr.outputs.new_release_version && format('v{0}', steps.sr.outputs.new_release_version) || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       # Reads conventional commits since the last tag, bumps the Cargo versions,
       # tags and creates the GitHub release. Does nothing if no commit warrants one.
       - id: sr
         if: github.ref == 'refs/heads/main'
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v5
         with:
           extra_plugins: |
             @semantic-release/exec
@@ -35,7 +35,7 @@ jobs:
       # Dry run on a branch: what version would semantic-release cut from here?
       - id: next
         if: github.ref != 'refs/heads/main'
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v5
         with:
           dry_run: true
           branches: ${{ github.ref_name }}
@@ -71,7 +71,7 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.version.outputs.ref }}
       - uses: dtolnay/rust-toolchain@stable
