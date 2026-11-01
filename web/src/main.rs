@@ -5,6 +5,21 @@ async fn main() {
     use flash_dance_web::app::{App, shell};
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    // APP_LOG_LEVEL (default debug) for this crate, warn for everything else.
+    let level = std::env::var("APP_LOG_LEVEL")
+        .ok()
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(tracing::Level::DEBUG);
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("flash_dance_web", level)
+                .with_default(tracing::Level::WARN),
+        )
+        .init();
 
     let config = get_configuration(None).expect("no leptos configuration");
     let options = config.leptos_options;
@@ -22,7 +37,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&address)
         .await
         .unwrap_or_else(|e| panic!("cannot listen on {address}: {e}"));
-    println!("flash-dance on http://{address}");
+    tracing::info!("flash-dance on http://{address}");
     let bridge = flash_dance_web::mqtt::options().map(|options| {
         let (stop, stopped) = tokio::sync::oneshot::channel();
         (
@@ -31,7 +46,7 @@ async fn main() {
         )
     });
     if bridge.is_none() {
-        println!("mqtt: off (set FLASH_DANCE_MQTT to a broker to turn it on)");
+        tracing::info!("mqtt: off (set FLASH_DANCE_MQTT to a broker to turn it on)");
     }
 
     axum::serve(listener, app.into_make_service())

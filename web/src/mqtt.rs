@@ -113,7 +113,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
         tokio::select! {
             event = events.poll() => match event {
                 Ok(Mqtt::Incoming(Packet::ConnAck(_))) => {
-                    println!("mqtt: connected");
+                    tracing::info!("connected");
                     // A fresh session every time, so subscriptions do not survive a
                     // reconnect and are made again here.
                     for topic in [LIGHT_SET, SOURCE_SET, GRID, MOODS_SET, MARQUEE_SET, HA_STATUS] {
@@ -137,7 +137,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                                 runner::start(&effect, Some(&source)).map(drop)
                             });
                             if let Ok(Err(error)) = started.await {
-                                eprintln!("mqtt: {error}");
+                                tracing::error!("{error}");
                             }
                             published = None;
                         }
@@ -148,7 +148,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                                 runner::marquee(&text, then.as_deref(), Some(&source))
                             });
                             if let Ok(Err(error)) = shown.await {
-                                eprintln!("mqtt: {error}");
+                                tracing::error!("{error}");
                             }
                             published = None;
                         }
@@ -174,14 +174,14 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                             published = None;
                         }
                         Some(Command::Source(_)) | None => {
-                            eprintln!("mqtt: ignored a message on {}", message.topic);
+                            tracing::warn!("ignored a message on {}", message.topic);
                         }
                     }
                 }
                 Ok(_) => {}
                 Err(error) => {
                     // The next poll reconnects; wait so a dead broker is not hammered.
-                    eprintln!("mqtt: {error}; retrying in 5 s");
+                    tracing::warn!("{error}; retrying in 5 s");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             },
@@ -220,7 +220,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 }
                 // Seen once: `status` collects an ended session, then reports idle.
                 if let Status::Failed { effect, error } = &status {
-                    eprintln!("mqtt: {effect} stopped: {error}");
+                    tracing::error!("{effect} stopped: {error}");
                 }
                 if published.as_ref() != Some(&status) {
                     publish(&client, LIGHT_STATE, true, light_state(&status).to_string());
@@ -250,7 +250,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
 /// so waiting for room in it would wait forever. A full queue drops the message.
 fn publish(client: &AsyncClient, topic: &str, retain: bool, payload: String) {
     if let Err(error) = client.try_publish(topic, QoS::AtLeastOnce, retain, payload) {
-        eprintln!("mqtt: could not publish on {topic}: {error}");
+        tracing::error!("could not publish on {topic}: {error}");
     }
 }
 
