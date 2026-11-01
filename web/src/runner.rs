@@ -168,7 +168,7 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
                     &flag,
                     report,
                 ),
-                None => flash_dance_effects::panel(&PICTURE, &MOODS, &flag, report),
+                None => flash_dance_effects::panel(&PICTURE, &MOODS, &MARQUEE, &flag, report),
             }
             .map_err(|e| e.to_string())
         })
@@ -195,9 +195,9 @@ pub fn press_mood(name: &str, source: Option<&str>) -> Result<Status, String> {
 }
 
 /// Scrolls `text` across the grid once, then shows the effect named `then` — or,
-/// without one, whatever was showing. The running effect session shows it, keeping
-/// its speed and brightness; with none running (idle, the panel) one starts, on
-/// `then` or the first effect.
+/// without one, the panel. The running effect session shows it, keeping its speed
+/// and brightness; with none running (idle, the panel) one starts, on `then` or
+/// the first effect. Without `then` the panel session shows it, starting if needed.
 pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<Status, String> {
     if text.trim().is_empty() {
         return Err("there is no text to scroll".to_string());
@@ -211,9 +211,16 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
         ),
         None => None,
     };
-    // A mood is shown by an effect session too, but it may be the panel's.
-    if !matches!(status(), Status::Running(name) if name != PANEL) {
-        start(then.unwrap_or(EFFECTS[0]).name(), source)?;
+    match then {
+        // A mood is shown by an effect session too, but it may be the panel's.
+        Some(_) if matches!(status(), Status::Running(name) if name != PANEL) => {}
+        Some(effect) => {
+            start(effect.name(), source)?;
+        }
+        None if matches!(status(), Status::Running(name) if name == PANEL) => {}
+        None => {
+            start(PANEL, source)?;
+        }
     }
     *lock(&MARQUEE) = Some(Marquee {
         text: text.to_string(),

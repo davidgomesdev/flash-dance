@@ -199,8 +199,9 @@ actions:
                       entity_id: "{{ entity }}"
               - conditions: "{{ playlist != '' }}"
                 sequence:
-                  # Scrolls the mood's name, then shows its effect: the marquee
-                  # does the switching, so the mood script is given no effect.
+                  # Scrolls the mood's name, then shows its effect, or the panel
+                  # when it has none: the marquee does the switching, so the
+                  # mood script is given no effect.
                   # Left to set it too, it would restart the session mid-scroll.
                   - action: mqtt.publish
                     data:
