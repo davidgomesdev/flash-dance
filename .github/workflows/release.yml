@@ -10,31 +10,18 @@ permissions:
   contents: write
 
 jobs:
+  # Dry run: works out the version and tag without tagging or publishing anything.
   version:
     runs-on: ubuntu-latest
     outputs:
-      published: ${{ steps.sr.outputs.new_release_published || steps.draft.outputs.published }}
-      tag: ${{ steps.sr.outputs.new_release_version && format('v{0}', steps.sr.outputs.new_release_version) || steps.draft.outputs.tag }}
-      # Built commit: the tag for a real release (it holds the version bump), the branch head for a draft.
-      ref: ${{ steps.sr.outputs.new_release_version && format('v{0}', steps.sr.outputs.new_release_version) || github.sha }}
+      published: ${{ github.ref != 'refs/heads/main' || steps.next.outputs.new_release_published }}
+      version: ${{ steps.tag.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      # Reads conventional commits since the last tag, bumps the Cargo versions,
-      # tags and creates the GitHub release. Does nothing if no commit warrants one.
-      - id: sr
-        if: github.ref == 'refs/heads/main'
-        uses: cycjimmy/semantic-release-action@v5
-        with:
-          extra_plugins: |
-            @semantic-release/exec
-            @semantic-release/git
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Dry run on a branch: what version would semantic-release cut from here?
       - id: next
-        if: github.ref != 'refs/heads/main'
         uses: cycjimmy/semantic-release-action@v5
         with:
           dry_run: true
@@ -44,25 +31,27 @@ jobs:
             @semantic-release/git
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Draft tag is <next version>+<n>, n counting that version's drafts so far.
+      # main: v<next>. Other branches: v<next>+<n>, n counting that version's drafts so far.
       # ponytail: no commit warrants a bump -> falls back to the latest tag's version.
-      - id: draft
-        if: github.ref != 'refs/heads/main'
+      - id: tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEXT: ${{ steps.next.outputs.new_release_version }}
         run: |
-          base="v${NEXT:-$(git describe --tags --abbrev=0 | sed 's/^v//')}"
-          n=$(gh release list --limit 1000 --json tagName --jq "[.[] | select(.tagName | startswith(\"$base+\"))] | length")
-          tag="$base+$((n + 1))"
-          gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" --title "$tag ($GITHUB_REF_NAME)" --generate-notes
-          echo "published=true" >> "$GITHUB_OUTPUT"
+          version="${NEXT:-$(git describe --tags --abbrev=0 | sed 's/^v//')}"
+          tag="v$version"
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            n=$(gh release list --limit 1000 --json tagName --jq "[.[] | select(.tagName | startswith(\"$tag+\"))] | length")
+            tag="$tag+$((n + 1))"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
     if: needs.version.outputs.published == 'true'
     strategy:
+      fail-fast: true
       matrix:
         include:
           - { os: macos-14, target: aarch64-apple-darwin }
@@ -72,8 +61,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.version.outputs.ref }}
+      # Same bump semantic-release will commit, so the binaries carry the release version.
+      - name: Set version
+        run: find . -name Cargo.toml -not -path './target/*' -exec perl -0pi -e 's/^version = ".*?"/version = "${{ needs.version.outputs.version }}"/m' {} +
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -97,7 +87,37 @@ jobs:
           done
           cp -r target/site "$name/site"
           tar czf "$name.tar.gz" "$name"
-      - name: Upload to release
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flash-dance-${{ matrix.target }}
+          path: flash-dance-*.tar.gz
+          if-no-files-found: error
+
+  # Runs only if every build job succeeded, so a failed target means no release.
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          pattern: flash-dance-*
+          merge-multiple: true
+      # main: semantic-release bumps the Cargo versions, tags and creates the release
+      # with dist/*.tar.gz attached (see .releaserc.json).
+      - if: github.ref == 'refs/heads/main'
+        uses: cycjimmy/semantic-release-action@v5
+        with:
+          extra_plugins: |
+            @semantic-release/exec
+            @semantic-release/git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: github.ref != 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.version.outputs.tag }}" flash-dance-*.tar.gz
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release create "$TAG" dist/*.tar.gz --draft --prerelease --target "$GITHUB_SHA" --title "$TAG ($GITHUB_REF_NAME)" --generate-notes
