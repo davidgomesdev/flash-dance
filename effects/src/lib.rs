@@ -700,6 +700,9 @@ pub enum Report {
     /// A mood was pressed, by name. Nothing is showing from then until an effect
     /// is picked.
     Mood(String),
+    /// A [`Marquee`] asked for the panel and has finished: the session is about to
+    /// return, for the caller to run [`panel`] next.
+    Panel,
     /// Every button event, controls included, as the device sent it, except the
     /// picker's and the moods': choosing one is not pressing a pad.
     Event(Event),
@@ -741,6 +744,9 @@ impl Moods {
 pub struct Marquee {
     pub text: String,
     pub then: Option<Effect>,
+    /// Show the panel after it instead, which is another session: [`run`] reports
+    /// [`Report::Panel`] and returns. Wins over `then`.
+    pub panel: bool,
 }
 
 /// Session's mode, which [`run`] and [`panel`] both have: the moods on the grid.
@@ -862,7 +868,7 @@ pub fn run(
     let mut moods = MoodMode::new(moods);
     // The marquee's letters and the virtual time it started; anything the device
     // switches to — picker, Session, a mood — cuts it short.
-    let mut scrolling: Option<(Vec<Glyph>, f32)> = None;
+    let mut scrolling: Option<(Vec<Glyph>, f32, bool)> = None;
     // Grid pads pressed in the picker or among the moods, so their releases stay
     // unreported too.
     let mut picked: Vec<Pad> = Vec::new();
@@ -898,7 +904,7 @@ pub fn run(
             }
             picking = false;
             moods.on = false;
-            scrolling = Some((glyphs(&next.text), virtual_time));
+            scrolling = Some((glyphs(&next.text), virtual_time, next.panel));
             app.reset(&mut pad)?;
             draw_speed(&mut pad, level)?;
             println!("marquee {:?}", next.text);
@@ -1002,9 +1008,13 @@ pub fn run(
 
         if moods.on {
             moods.draw(&mut pad, now)?;
-        } else if let Some((text, since)) = &scrolling {
+        } else if let Some((text, since, panel)) = &scrolling {
             let still = app.marquee(text, virtual_time - since);
             pad.set_all(app.grid.lights())?;
+            if !still && *panel {
+                report(Report::Panel);
+                break 'running;
+            }
             if !still {
                 scrolling = None;
                 app.reset(&mut pad)?;

@@ -37,7 +37,8 @@ blueprint:
       name: Playlists
       description: >-
         One per pad. A row (1 is the top) puts the pad after what is on that row
-        already; without one it goes after the pad before it. No colour is white.
+        already; without one it goes after the pad before it. No colour is white. No
+        effect is the panel.
       default: []
       selector:
         object:
@@ -189,7 +190,7 @@ actions:
                 {{ (p.playlist if p else '') or '' }}
               effect: >-
                 {% set p = playlists | selectattr('name', 'eq', name) | first %}
-                {{ (p.effect if p else '') or '' }}
+                {{ (p.effect if p else '') or 'panel' }}
           - choose:
               - conditions: "{{ entity != '' }}"
                 sequence:

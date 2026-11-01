@@ -144,7 +144,11 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         effect.map_or(PANEL, |e| e.name()).to_string(),
     )));
     let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
-    let report = move |report| match report {
+    // Set by a marquee that wants the panel next, which this thread then runs.
+    let to_panel = Arc::new(AtomicBool::new(false));
+    let (panel_next, shown_next) = (Arc::clone(&to_panel), Arc::clone(&showing));
+    let mut report = move |report| match report {
+        Report::Panel => panel_next.store(true, Ordering::Relaxed),
         Report::Showing(effect) => *lock(&shown) = Status::Running(effect.name().to_string()),
         heard => {
             if let Report::Mood(name) = &heard {
@@ -159,16 +163,22 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     let thread = std::thread::Builder::new()
         .name(format!("effect: {name}"))
         .spawn(move || {
-            match effect {
+            let ended = match effect {
                 Some(effect) => flash_dance_effects::run(
                     effect,
                     source.as_deref(),
                     &MOODS,
                     &MARQUEE,
                     &flag,
-                    report,
+                    &mut report,
                 ),
-                None => flash_dance_effects::panel(&PICTURE, &MOODS, &flag, report),
+                None => flash_dance_effects::panel(&PICTURE, &MOODS, &flag, &mut report),
+            };
+            if ended.is_ok() && to_panel.load(Ordering::Relaxed) {
+                *lock(&shown_next) = Status::Running(PANEL.to_string());
+                flash_dance_effects::panel(&PICTURE, &MOODS, &flag, &mut report)
+            } else {
+                ended
             }
             .map_err(|e| e.to_string())
         })
@@ -202,7 +212,8 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
     if text.trim().is_empty() {
         return Err("there is no text to scroll".to_string());
     }
-    let then = match then {
+    let panel = then == Some(PANEL);
+    let then = match then.filter(|_| !panel) {
         Some(name) => Some(
             EFFECTS
                 .into_iter()
@@ -218,6 +229,7 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
     *lock(&MARQUEE) = Some(Marquee {
         text: text.to_string(),
         then,
+        panel,
     });
     Ok(status())
 }

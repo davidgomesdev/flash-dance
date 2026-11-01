@@ -194,7 +194,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 Report::Mood(name) => {
                     publish(&client, MOOD, false, json!({"event_type": name}).to_string());
                 }
-                Report::Showing(_) => {}
+                Report::Showing(_) | Report::Panel => {}
             },
             _ = rescan.tick() => {
                 let found = tokio::task::spawn_blocking(|| {
