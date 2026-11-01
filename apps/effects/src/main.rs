@@ -38,6 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         start,
         source.as_deref(),
         &Mutex::new(Moods::new()),
+        &Mutex::new(None),
         &AtomicBool::new(false),
         |_| {},
     )

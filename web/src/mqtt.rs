@@ -19,6 +19,9 @@
 //! connects, which is HA's cue to repaint, and the broker says `offline` for it
 //! when the connection drops.
 //!
+//! `{"text": "hello", "effect": "fire"}` on [`MARQUEE_SET`] scrolls the text across
+//! once, then starts `effect` — or, without one, goes back to what was showing.
+//!
 //! Like the website, this only ever goes through [`runner`], so the one-session rule
 //! and the stop that lets `Drop` run hold here too.
 
@@ -43,6 +46,7 @@ const PAD: &str = "flash-dance/pad";
 const GRID: &str = "flash-dance/grid/set";
 const MOODS_SET: &str = "flash-dance/moods/set";
 const MOOD: &str = "flash-dance/mood";
+const MARQUEE_SET: &str = "flash-dance/marquee/set";
 const DISCOVERY: &str = "homeassistant/device/flash_dance/config";
 /// HA's birth message: `online` here means it has (re)started and wants discovery again.
 const HA_STATUS: &str = "homeassistant/status";
@@ -112,7 +116,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     println!("mqtt: connected");
                     // A fresh session every time, so subscriptions do not survive a
                     // reconnect and are made again here.
-                    for topic in [LIGHT_SET, SOURCE_SET, GRID, MOODS_SET, HA_STATUS] {
+                    for topic in [LIGHT_SET, SOURCE_SET, GRID, MOODS_SET, MARQUEE_SET, HA_STATUS] {
                         let _ = client.try_subscribe(topic, QoS::AtLeastOnce);
                     }
                     announce(&client, &sources, &source, &moods);
@@ -133,6 +137,17 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                                 runner::start(&effect, Some(&source)).map(drop)
                             });
                             if let Ok(Err(error)) = started.await {
+                                eprintln!("mqtt: {error}");
+                            }
+                            published = None;
+                        }
+                        Some(Command::Marquee { text, then }) => {
+                            let source = source.clone();
+                            // Like "on": it may start a session, joining the old one.
+                            let shown = tokio::task::spawn_blocking(move || {
+                                runner::marquee(&text, then.as_deref(), Some(&source))
+                            });
+                            if let Ok(Err(error)) = shown.await {
                                 eprintln!("mqtt: {error}");
                             }
                             published = None;
@@ -262,6 +277,11 @@ enum Command {
     Source(String),
     Paint(Vec<(usize, usize, [u8; 3])>),
     Moods(Vec<Mood>),
+    /// Text to scroll once, and the effect to show after it, if HA named one.
+    Marquee {
+        text: String,
+        then: Option<String>,
+    },
     /// HA restarted and has forgotten the device.
     Announce,
 }
@@ -298,6 +318,13 @@ fn command(topic: &str, payload: &[u8]) -> Option<Command> {
                 .map(mood)
                 .collect::<Option<_>>()
                 .map(Command::Moods)
+        }
+        MARQUEE_SET => {
+            let value: Value = serde_json::from_slice(payload).ok()?;
+            Some(Command::Marquee {
+                text: value["text"].as_str()?.to_string(),
+                then: value["effect"].as_str().map(String::from),
+            })
         }
         HA_STATUS => (payload == b"online").then_some(Command::Announce),
         _ => None,
@@ -467,6 +494,25 @@ mod tests {
         assert_eq!(command(LIGHT_SET, b"not json"), None);
         assert_eq!(command(HA_STATUS, b"online"), Some(Command::Announce));
         assert_eq!(command(HA_STATUS, b"offline"), None);
+    }
+
+    #[test]
+    fn marquee_takes_text_and_maybe_an_effect() {
+        assert_eq!(
+            command(MARQUEE_SET, br#"{"text":"hi","effect":"fire"}"#),
+            Some(Command::Marquee {
+                text: "hi".into(),
+                then: Some("fire".into())
+            })
+        );
+        assert_eq!(
+            command(MARQUEE_SET, br#"{"text":"hi"}"#),
+            Some(Command::Marquee {
+                text: "hi".into(),
+                then: None
+            })
+        );
+        assert_eq!(command(MARQUEE_SET, br#"{"effect":"fire"}"#), None);
     }
 
     #[test]

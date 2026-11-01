@@ -12,6 +12,9 @@
 //!   green at 1x, red above.
 //! - **Stop/Solo/Mute** (bottom of the right column) quits.
 //!
+//! A [`Marquee`] set from outside scrolls its text across once, over whatever is
+//! showing, then hands over to its effect or back to the one it interrupted.
+//!
 //! Both settings are global — they survive switching effects, because they live
 //! out here rather than in the per-effect state that [`App::reset`] wipes.
 //! Brightness is global in a stronger sense too: it is a setting on the device
@@ -32,6 +35,8 @@ const SESSION: Pad = Pad(95); // top row, fifth, "Session"
 const FPS: f64 = 30.0;
 /// Seconds a pressed mood pulses: long enough to see it took, short enough not to nag.
 const GLOW: f32 = 5.0;
+/// Marquee columns per (virtual) second: a letter and its gap is six columns.
+const SCROLL: f32 = 10.0;
 
 fn quit_button() -> Pad {
     Pad::right(7) // bottom of the right column, "Stop/Solo/Mute"
@@ -572,6 +577,154 @@ impl App {
         self.grid.fill(hsv(self.hue, 1.0, sound.bass() * 0.12));
         self.draw_ripples(t);
     }
+
+    /// `text` coming in from the right, `elapsed` seconds after it started, a hue
+    /// per letter. False once its last column has gone off the left edge.
+    fn marquee(&mut self, text: &[[u8; 7]], elapsed: f32) -> bool {
+        self.grid.clear();
+        // Whole columns: half a pad lit is a blur, not a position.
+        let shift = (elapsed * SCROLL) as i32;
+        for (i, glyph) in text.iter().enumerate() {
+            for (y, row) in glyph.iter().enumerate() {
+                for column in 0..5 {
+                    if row >> (4 - column) & 1 == 1 {
+                        let x = 8 + (i * 6 + column) as i32 - shift;
+                        self.grid.set(x, y as i32, hsv(i as f32 * 0.13, 1.0, 1.0));
+                    }
+                }
+            }
+        }
+        8 + text.len() as i32 * 6 - 2 - shift >= 0
+    }
+}
+
+/// A 5x7 glyph per character, rows from the top, bit 4 the leftmost column.
+/// Lowercase shows as uppercase, and anything without a glyph as `?`.
+fn glyphs(text: &str) -> Vec<[u8; 7]> {
+    text.chars()
+        .map(|c| glyph(c.to_ascii_uppercase()))
+        .collect()
+}
+
+fn glyph(c: char) -> [u8; 7] {
+    match c {
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'D' => [
+            0b11100, 0b10010, 0b10001, 0b10001, 0b10001, 0b10010, 0b11100,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+        ],
+        ' ' => [0; 7],
+        '.' => [0, 0, 0, 0, 0, 0b01100, 0b01100],
+        ',' => [0, 0, 0, 0, 0b01100, 0b00100, 0b01000],
+        '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0, 0b00100],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        ':' => [0, 0b01100, 0b01100, 0, 0b01100, 0b01100, 0],
+        '\'' => [0b01100, 0b00100, 0b01000, 0, 0, 0, 0],
+        _ => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0, 0b00100], // ?
+    }
 }
 
 /// Every grid coordinate, x from the left and y from the top.
@@ -702,6 +855,15 @@ impl Moods {
     }
 }
 
+/// Text to scroll across the grid once, set from outside — Home Assistant most
+/// likely — and taken by the running session next frame. Then `then`, or without
+/// one, whatever was showing before: the effect, or the moods.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Marquee {
+    pub text: String,
+    pub then: Option<Effect>,
+}
+
 /// Session's mode, which [`run`] and [`panel`] both have: the moods on the grid.
 struct MoodMode<'a> {
     moods: &'a Mutex<Moods>,
@@ -797,7 +959,7 @@ impl<'a> MoodMode<'a> {
 /// Stop/Solo/Mute is pressed or `stop` is set. `source` is the audio source the
 /// sound effects listen to, by any part of its name; `None` is whatever the machine
 /// is playing. `report` hears what is showing, each mood pressed and every button
-/// event, on the session's own thread.
+/// event, on the session's own thread. A [`Marquee`] put in `marquee` shows next.
 ///
 /// Returns normally either way, so the `Launchpad`'s `Drop` gets to clear the
 /// LEDs, put the brightness back and leave programmer mode. That is why `stop` is
@@ -807,6 +969,7 @@ pub fn run(
     start: Effect,
     source: Option<&str>,
     moods: &Mutex<Moods>,
+    marquee: &Mutex<Option<Marquee>>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -818,6 +981,9 @@ pub fn run(
     let mut current = Some(EFFECTS.iter().position(|e| *e == start).unwrap_or(0));
     let mut picking = false;
     let mut moods = MoodMode::new(moods);
+    // The marquee's letters and the virtual time it started; anything the device
+    // switches to — picker, Session, a mood — cuts it short.
+    let mut scrolling: Option<(Vec<[u8; 7]>, f32)> = None;
     // Grid pads pressed in the picker or among the moods, so their releases stay
     // unreported too.
     let mut picked: Vec<Pad> = Vec::new();
@@ -843,9 +1009,25 @@ pub fn run(
         wall = now;
         virtual_time += dt;
 
+        let next = marquee
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(next) = next {
+            if let Some(then) = next.then {
+                current = EFFECTS.iter().position(|e| *e == then);
+            }
+            picking = false;
+            moods.on = false;
+            scrolling = Some((glyphs(&next.text), virtual_time));
+            app.reset(&mut pad)?;
+            draw_speed(&mut pad, level)?;
+            println!("marquee {:?}", next.text);
+        }
         if let Some(name) = moods.remote(now) {
             current = None;
             picking = false;
+            scrolling = None;
             draw_speed(&mut pad, level)?;
             println!("mood {name}");
             report(Report::Mood(name));
@@ -888,6 +1070,7 @@ pub fn run(
                 None => {}
             }
             if button == MENU {
+                scrolling = None;
                 picking = !picking;
                 // Going to the effects lets go of the mood.
                 moods.glow = None;
@@ -905,6 +1088,7 @@ pub fn run(
                 continue;
             }
             if button == SESSION {
+                scrolling = None;
                 if !moods.on {
                     picking = false;
                     moods.show();
@@ -939,6 +1123,21 @@ pub fn run(
 
         if moods.on {
             moods.draw(&mut pad, now)?;
+        } else if let Some((text, since)) = &scrolling {
+            let still = app.marquee(text, virtual_time - since);
+            pad.set_all(app.grid.lights())?;
+            if !still {
+                scrolling = None;
+                app.reset(&mut pad)?;
+                draw_speed(&mut pad, level)?;
+                match current {
+                    Some(i) => {
+                        println!("{}", EFFECTS[i].name());
+                        report(Report::Showing(EFFECTS[i]));
+                    }
+                    None => moods.show(),
+                }
+            }
         } else if !picking && let Some(i) = current {
             app.render(&mut pad, EFFECTS[i], virtual_time, dt, &queue)?;
         }
@@ -1064,6 +1263,29 @@ mod tests {
                 assert_ne!(a.name(), b.name());
             }
         }
+    }
+
+    #[test]
+    fn marquee_comes_in_from_the_right_and_ends_once_it_has_all_gone() {
+        let mut app = App::new(None);
+        let lit = |app: &App| {
+            cells()
+                .filter(|&(x, y)| app.grid.get(x, y) != [0.0; 3])
+                .count()
+        };
+        let text = glyphs("Hi");
+        assert!(app.marquee(&text, 0.0));
+        assert_eq!(lit(&app), 0, "starts just off the right edge");
+        // Eight columns in, the H fills the left five.
+        assert!(app.marquee(&text, 8.0 / SCROLL));
+        assert!(app.grid.get(0, 0) != [0.0; 3] && app.grid.get(4, 3) != [0.0; 3]);
+        // The I's last lit column is the tenth; its eleventh is blank, and leaves
+        // after 8 + 10 + 1 columns.
+        assert!(app.marquee(&text, 17.0 / SCROLL));
+        assert!(lit(&app) > 0);
+        assert!(app.marquee(&text, 18.0 / SCROLL));
+        assert!(!app.marquee(&text, 19.0 / SCROLL));
+        assert_eq!(lit(&app), 0);
     }
 
     #[test]
