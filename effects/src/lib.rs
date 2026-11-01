@@ -736,7 +736,7 @@ impl Moods {
 
 /// Text to scroll across the grid once, set from outside — Home Assistant most
 /// likely — and taken by the running session next frame. Then `then`, or without
-/// one, whatever was showing before: the effect, or the moods.
+/// one, the panel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Marquee {
     pub text: String,
@@ -1034,10 +1034,12 @@ pub type Picture = [[[u8; 3]; 8]; 8];
 /// someone else paints, Home Assistant most likely. Session shows `moods` instead,
 /// as in [`run`], and pressing one leaves the picture for good. It redraws when the
 /// picture changes, reports every event like [`run`], and quits on Stop/Solo/Mute or
-/// `stop`, returning normally for the same reason [`run`] does.
+/// `stop`, returning normally for the same reason [`run`] does. A [`Marquee`] put
+/// in `marquee` scrolls first, and the picture comes back after it.
 pub fn panel(
     picture: &Mutex<Picture>,
     moods: &Mutex<Moods>,
+    marquee: &Mutex<Option<Marquee>>,
     stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
@@ -1045,6 +1047,9 @@ pub fn panel(
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
     let mut shown = None;
+    let mut app = App::new(None);
+    // The marquee's letters and the time it started.
+    let mut scrolling: Option<(Vec<Glyph>, f32)> = None;
     let mut moods = MoodMode::new(moods);
     // False once a mood is pressed, which stops the panel like it stops an effect.
     let mut painting = true;
@@ -1058,6 +1063,14 @@ pub fn panel(
         let now = clock.tick(&events, &mut queue);
         if stop.load(Ordering::Relaxed) {
             break 'running;
+        }
+        let next = marquee
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(next) = next {
+            moods.on = false;
+            scrolling = Some((glyphs(&next.text), now));
         }
         if let Some(name) = moods.remote(now) {
             painting = false;
@@ -1080,6 +1093,7 @@ pub fn panel(
                 break 'running;
             }
             if button == SESSION {
+                scrolling = None;
                 if !moods.on {
                     moods.show();
                 } else if painting {
@@ -1096,6 +1110,14 @@ pub fn panel(
         if moods.on {
             moods.draw(&mut pad, now)?;
             continue;
+        }
+        if let Some((text, since)) = &scrolling {
+            if app.marquee(text, now - since) {
+                pad.set_all(app.grid.lights())?;
+                continue;
+            }
+            scrolling = None;
+            shown = None;
         }
         let now = *picture
             .lock()

@@ -106,9 +106,9 @@ connects; trigger on that to repaint everything after a restart.
 
 To scroll a message across the grid, publish `{"text": "hello", "effect": "fire"}`
 to `flash-dance/marquee/set`. It scrolls once, right to left, and when its last
-letter has gone the grid shows `effect` — or, without one, whatever was showing
-before. A running effect keeps its speed and brightness; with nothing running, a
-session starts. The website does the same from its **Scroll** box.
+letter has gone the grid shows `effect` — or, without one, the `panel`. A running
+effect keeps its speed and brightness; with nothing running, a session starts.
+The website does the same from its **Scroll** box.
 
 ### Moods
 
@@ -120,7 +120,7 @@ device (starting a session first if none is running). Pressing a mood stops the
 effect — the light stays on with no effect — pulses its pad for 5 s and fires
 `event.launchpad_mood` with the mood's name as the event type.
 A playlist mood from the blueprint also scrolls its name across the grid once,
-then shows its effect.
+then shows its effect, or the panel if it has none.
 
 **The easy way:** two blueprints, imported into Home Assistant from their links.
 
