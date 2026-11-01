@@ -90,6 +90,18 @@ pub async fn start_effect(effect: String, source: String) -> Result<Status, Serv
     crate::runner::start(&effect, Some(source.as_str())).map_err(ServerFnError::new)
 }
 
+/// Scrolls `text` once, then `effect` if given, else what was showing. No page
+/// uses it yet; it is the HTTP way in, beside MQTT.
+#[server]
+pub async fn show_marquee(
+    text: String,
+    effect: Option<String>,
+    source: String,
+) -> Result<Status, ServerFnError> {
+    crate::runner::marquee(&text, effect.as_deref(), Some(source.as_str()))
+        .map_err(ServerFnError::new)
+}
+
 #[server]
 pub async fn stop_effect() -> Result<Status, ServerFnError> {
     Ok(crate::runner::stop())

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
-use flash_dance_effects::{EFFECTS, Mood, Moods, Picture, Report};
+use flash_dance_effects::{EFFECTS, Marquee, Mood, Moods, Picture, Report};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::app::{EffectInfo, MoodInfo, SourceInfo, Status};
@@ -24,6 +24,9 @@ static PICTURE: Mutex<Picture> = Mutex::new([[[0; 3]; 8]; 8]);
 /// What Session shows, and a mood pressed on the website. Set from outside like
 /// [`PICTURE`], and read by every session.
 static MOODS: Mutex<Moods> = Mutex::new(Moods::new());
+
+/// Text waiting for the running effect session to take it, next frame.
+static MARQUEE: Mutex<Option<Marquee>> = Mutex::new(None);
 
 /// Who hears the button events and mood presses of whatever session is running.
 static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
@@ -132,8 +135,9 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
 
     let mut running = running();
     halt(&mut running);
-    // A press meant for the session just stopped is not one for this.
+    // A press or marquee meant for the session just stopped is not one for this.
     lock(&MOODS).pressed = None;
+    *lock(&MARQUEE) = None;
 
     let stop = Arc::new(AtomicBool::new(false));
     let showing = Arc::new(Mutex::new(Status::Running(
@@ -156,9 +160,14 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         .name(format!("effect: {name}"))
         .spawn(move || {
             match effect {
-                Some(effect) => {
-                    flash_dance_effects::run(effect, source.as_deref(), &MOODS, &flag, report)
-                }
+                Some(effect) => flash_dance_effects::run(
+                    effect,
+                    source.as_deref(),
+                    &MOODS,
+                    &MARQUEE,
+                    &flag,
+                    report,
+                ),
                 None => flash_dance_effects::panel(&PICTURE, &MOODS, &flag, report),
             }
             .map_err(|e| e.to_string())
@@ -183,6 +192,34 @@ pub fn press_mood(name: &str, source: Option<&str>) -> Result<Status, String> {
     }
     lock(&MOODS).pressed = Some(name.to_string());
     Ok(Status::Mood(name.to_string()))
+}
+
+/// Scrolls `text` across the grid once, then shows the effect named `then` — or,
+/// without one, whatever was showing. The running effect session shows it, keeping
+/// its speed and brightness; with none running (idle, the panel) one starts, on
+/// `then` or the first effect.
+pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<Status, String> {
+    if text.trim().is_empty() {
+        return Err("there is no text to scroll".to_string());
+    }
+    let then = match then {
+        Some(name) => Some(
+            EFFECTS
+                .into_iter()
+                .find(|effect| effect.name() == name)
+                .ok_or_else(|| format!("there is no effect called {name:?}"))?,
+        ),
+        None => None,
+    };
+    // A mood is shown by an effect session too, but it may be the panel's.
+    if !matches!(status(), Status::Running(name) if name != PANEL) {
+        start(then.unwrap_or(EFFECTS[0]).name(), source)?;
+    }
+    *lock(&MARQUEE) = Some(Marquee {
+        text: text.to_string(),
+        then,
+    });
+    Ok(status())
 }
 
 pub fn stop() -> Status {

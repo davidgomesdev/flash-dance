@@ -104,6 +104,12 @@ picture is kept while an effect runs, so switching to `panel` shows it at once.
 The bridge publishes `online` on `flash-dance/availability` each time it
 connects; trigger on that to repaint everything after a restart.
 
+To scroll a message across the grid, publish `{"text": "hello", "effect": "fire"}`
+to `flash-dance/marquee/set`. It scrolls once, right to left, and when its last
+letter has gone the grid shows `effect` — or, without one, whatever was showing
+before. A running effect keeps its speed and brightness; with nothing running, a
+session starts. The website's server takes the same over HTTP, as `show_marquee`.
+
 ### Moods
 
 A mood is a pad that tells Home Assistant to do something: play a playlist, set
