@@ -484,7 +484,7 @@ checksum = "669a445ee724c5c69b1b06fe0b63e70a1c84bc9bb7d9696cd4f4e3ec45050408"
 
 [[package]]
 name = "effects"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance-effects",
 ]
@@ -576,18 +576,18 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "flash-dance"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "midir",
 ]
 
 [[package]]
 name = "flash-dance-audio"
-version = "1.0.0"
+version = "1.1.0"
 
 [[package]]
 name = "flash-dance-effects"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance",
  "flash-dance-audio",
@@ -595,7 +595,7 @@ dependencies = [
 
 [[package]]
 name = "flash-dance-web"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axum",
  "console_error_panic_hook",
@@ -1395,7 +1395,7 @@ dependencies = [
 
 [[package]]
 name = "life"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance",
 ]
@@ -1599,14 +1599,14 @@ checksum = "8c04f5d74368e4d0dfe06c45c8627c81bd7c317d52762d118fb9b3076f6420fd"
 
 [[package]]
 name = "paint"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance",
 ]
 
 [[package]]
 name = "palette"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance",
 ]
@@ -2233,7 +2233,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simon"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance",
 ]
@@ -2261,7 +2261,7 @@ checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 
 [[package]]
 name = "snake"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance",
 ]
@@ -2829,7 +2829,7 @@ dependencies = [
 
 [[package]]
 name = "whack"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "flash-dance",
 ]
