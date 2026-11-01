@@ -258,6 +258,22 @@ pace with `Clock` rather than sending as fast as the calls return.
 
 Requires ALSA on Linux (`libasound2-dev` to build).
 
+## Releases
+
+Each release has one tarball per platform. Pick by what the machine runs:
+
+| Tarball ends in | For |
+|---|---|
+| `aarch64-apple-darwin` | Apple Silicon Macs |
+| `aarch64-linux-glibc2.35` | 64-bit ARM Linux with glibc 2.35 or newer: Raspberry Pi OS / Debian 12 (bookworm) and up |
+| `aarch64-linux-glibc2.39` | 64-bit ARM Linux with glibc 2.39 or newer: Ubuntu 24.04, Debian 13 and up |
+
+Check with `uname -m` (`aarch64` or `arm64` is right) and `ldd --version` (the
+last number on the first line is the glibc version). Not sure which Linux one?
+Take `glibc2.35`; it runs anywhere `glibc2.39` does. A `GLIBC_2.xx not found` error
+means the build is too new for the machine. Branch builds are prereleases named
+`v<next version>+<n>`.
+
 ## Adding an app
 
 Drop a crate in `apps/`; the workspace picks it up from the `apps/*` glob.
