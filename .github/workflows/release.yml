@@ -32,14 +32,30 @@ jobs:
             @semantic-release/git
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # ponytail: draft tag is branch+sha, no version bump; add if drafts need real versions.
+      # Dry run on a branch: what version would semantic-release cut from here?
+      - id: next
+        if: github.ref != 'refs/heads/main'
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          dry_run: true
+          branches: ${{ github.ref_name }}
+          extra_plugins: |
+            @semantic-release/exec
+            @semantic-release/git
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Draft tag is <next version>+<n>, n counting that version's drafts so far.
+      # ponytail: no commit warrants a bump -> falls back to the latest tag's version.
       - id: draft
         if: github.ref != 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT: ${{ steps.next.outputs.new_release_version }}
         run: |
-          tag="draft-${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"
-          gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" --title "$tag" --generate-notes
+          base="v${NEXT:-$(git describe --tags --abbrev=0 | sed 's/^v//')}"
+          n=$(gh release list --limit 1000 --json tagName --jq "[.[] | select(.tagName | startswith(\"$base+\"))] | length")
+          tag="$base+$((n + 1))"
+          gh release create "$tag" --draft --prerelease --target "$GITHUB_SHA" --title "$tag ($GITHUB_REF_NAME)" --generate-notes
           echo "published=true" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
