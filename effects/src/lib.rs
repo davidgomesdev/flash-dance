@@ -13,7 +13,8 @@
 //! - **Stop/Solo/Mute** (bottom of the right column) quits.
 //!
 //! A [`Marquee`] set from outside scrolls its text across once, over whatever is
-//! showing, then hands over to its effect or back to the one it interrupted.
+//! showing, then hands over to its effect, or to the panel without one: [`run`] reports
+//! [`Report::Panel`] and returns, for the caller to run [`panel`].
 //!
 //! Both settings are global — they survive switching effects, because they live
 //! out here rather than in the per-effect state that [`App::reset`] wipes.
@@ -700,8 +701,8 @@ pub enum Report {
     /// A mood was pressed, by name. Nothing is showing from then until an effect
     /// is picked.
     Mood(String),
-    /// A [`Marquee`] asked for the panel and has finished: the session is about to
-    /// return, for the caller to run [`panel`] next.
+    /// A [`Marquee`] with no effect has finished: the session is about to return,
+    /// for the caller to run [`panel`] next.
     Panel,
     /// Every button event, controls included, as the device sent it, except the
     /// picker's and the moods': choosing one is not pressing a pad.
@@ -739,14 +740,11 @@ impl Moods {
 
 /// Text to scroll across the grid once, set from outside — Home Assistant most
 /// likely — and taken by the running session next frame. Then `then`, or without
-/// one, whatever was showing before: the effect, or the moods.
+/// one, the panel: [`run`] reports [`Report::Panel`] and returns.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Marquee {
     pub text: String,
     pub then: Option<Effect>,
-    /// Show the panel after it instead, which is another session: [`run`] reports
-    /// [`Report::Panel`] and returns. Wins over `then`.
-    pub panel: bool,
 }
 
 /// Session's mode, which [`run`] and [`panel`] both have: the moods on the grid.
@@ -868,7 +866,7 @@ pub fn run(
     let mut moods = MoodMode::new(moods);
     // The marquee's letters and the virtual time it started; anything the device
     // switches to — picker, Session, a mood — cuts it short.
-    let mut scrolling: Option<(Vec<Glyph>, f32, bool)> = None;
+    let mut scrolling: Option<(Vec<Glyph>, f32, Option<Effect>)> = None;
     // Grid pads pressed in the picker or among the moods, so their releases stay
     // unreported too.
     let mut picked: Vec<Pad> = Vec::new();
@@ -904,7 +902,7 @@ pub fn run(
             }
             picking = false;
             moods.on = false;
-            scrolling = Some((glyphs(&next.text), virtual_time, next.panel));
+            scrolling = Some((glyphs(&next.text), virtual_time, next.then));
             app.reset(&mut pad)?;
             draw_speed(&mut pad, level)?;
             println!("marquee {:?}", next.text);
@@ -1008,10 +1006,10 @@ pub fn run(
 
         if moods.on {
             moods.draw(&mut pad, now)?;
-        } else if let Some((text, since, panel)) = &scrolling {
+        } else if let Some((text, since, then)) = &scrolling {
             let still = app.marquee(text, virtual_time - since);
             pad.set_all(app.grid.lights())?;
-            if !still && *panel {
+            if !still && then.is_none() {
                 report(Report::Panel);
                 break 'running;
             }

@@ -212,9 +212,8 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
     if text.trim().is_empty() {
         return Err("there is no text to scroll".to_string());
     }
-    // No effect is the panel; it is what a mood leaves on.
-    let panel = matches!(then, None | Some(PANEL));
-    let then = match then.filter(|_| !panel) {
+    // No effect is the panel, which the library takes as no `then`.
+    let then = match then.filter(|&name| name != PANEL) {
         Some(name) => Some(
             EFFECTS
                 .into_iter()
@@ -230,7 +229,6 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
     *lock(&MARQUEE) = Some(Marquee {
         text: text.to_string(),
         then,
-        panel,
     });
     Ok(status())
 }
