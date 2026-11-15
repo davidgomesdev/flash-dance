@@ -1089,6 +1089,33 @@ pub fn panel(
     moods: &Mutex<Moods>,
     marquee: &Mutex<Option<Marquee>>,
     stop: &AtomicBool,
+    report: impl FnMut(Report),
+) -> Result<()> {
+    canvas(picture, true, moods, marquee, stop, report)
+}
+
+/// Runs a session that keeps every LED off: the device held, its presses still
+/// reported, nothing lit. Otherwise [`panel`], on a picture nobody paints and
+/// without its lit Stop and Session buttons — Session still shows `moods`, and a
+/// [`Marquee`] still scrolls, since both are someone asking for light.
+pub fn dark(
+    moods: &Mutex<Moods>,
+    marquee: &Mutex<Option<Marquee>>,
+    stop: &AtomicBool,
+    report: impl FnMut(Report),
+) -> Result<()> {
+    let nothing = Mutex::new([[[0; 3]; 8]; 8]);
+    canvas(&nothing, false, moods, marquee, stop, report)
+}
+
+/// [`panel`] and [`dark`]: `picture` on the grid, and with `edges` the Stop and
+/// Session buttons lit so they can be found.
+fn canvas(
+    picture: &Mutex<Picture>,
+    edges: bool,
+    moods: &Mutex<Moods>,
+    marquee: &Mutex<Option<Marquee>>,
+    stop: &AtomicBool,
     mut report: impl FnMut(Report),
 ) -> Result<()> {
     let (mut pad, events) = Launchpad::connect()?;
@@ -1103,10 +1130,12 @@ pub fn panel(
     let mut painting = true;
     let mut picked: Vec<Pad> = Vec::new();
     let mut quit = QuitButton::default();
-    pad.set_all([
-        (quit_button(), Light::Solid(7)),
-        (SESSION, Light::Rgb(30, 30, 30)),
-    ])?;
+    if edges {
+        pad.set_all([
+            (quit_button(), Light::Solid(7)),
+            (SESSION, Light::Rgb(30, 30, 30)),
+        ])?;
+    }
 
     'running: loop {
         let now = clock.tick(&events, &mut queue);

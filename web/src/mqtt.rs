@@ -1,14 +1,18 @@
 //! Home Assistant, over MQTT: the Launchpad as a device HA discovers by itself.
 //!
 //! - a **light** whose effect list is every effect plus [`PANEL`]: on starts one,
-//!   off goes back to the panel, since the server always holds the device;
+//!   off makes the grid dark. The server always holds the device, so off is not a
+//!   release: presses, moods and Stop still reach HA with every LED off. With no
+//!   Launchpad answering, the light is *unavailable* rather than off, through
+//!   [`LAUNCHPAD`];
 //! - a **select** for the audio source the sound effects listen to;
 //! - an **event** entity, `event.launchpad_pad`, firing on every grid press and
 //!   release with its `x`, `y` and velocity;
 //! - an **event** entity, `event.launchpad_mood`, firing with a mood's name as its
 //!   event type when Session's mood pad is pressed;
 //! - an **event** entity, `event.launchpad_stop`, firing `press` when Stop/Solo/Mute
-//!   is tapped. Holding it ends the session instead, which the light reports.
+//!   is tapped. Holding it ends an effect instead, back to the panel, which the
+//!   light reports.
 //!
 //! HA lists the moods, retained, on [`MOODS_SET`]: `[{"pad": [x, y], "name": …,
 //! "rgb": [r, g, b]}]`. Their names are the mood entity's event types, so a new
@@ -37,9 +41,12 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use crate::app::Status;
-use crate::runner::{self, PANEL};
+use crate::runner::{self, DARK, PANEL};
 
 const AVAILABILITY: &str = "flash-dance/availability";
+/// Whether a Launchpad answers, as `online` or `offline`, retained. The light needs
+/// it and [`AVAILABILITY`] both: the Pi can be up with nothing plugged in.
+const LAUNCHPAD: &str = "flash-dance/launchpad/availability";
 const LIGHT_SET: &str = "flash-dance/light/set";
 const LIGHT_STATE: &str = "flash-dance/light/state";
 const SOURCE_SET: &str = "flash-dance/source/set";
@@ -113,6 +120,8 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
     let mut last = runner::effects()[0].name.clone();
     // `None` forces the next tick to publish, whatever the state is.
     let mut published: Option<Status> = None;
+    // The same for [`LAUNCHPAD`], reset with it.
+    let mut connected: Option<bool> = None;
 
     loop {
         tokio::select! {
@@ -128,6 +137,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     }
                     announce(&client, &sources, &source, &moods);
                     published = None;
+                    connected = None;
                 }
                 Ok(Mqtt::Incoming(Packet::Publish(message))) => {
                     tracing::debug!(bytes = message.payload.len(), "received on {}", message.topic);
@@ -165,7 +175,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                         }
                         Some(Command::Off) => {
                             tracing::info!("Home Assistant: off");
-                            let _ = tokio::task::spawn_blocking(runner::stop).await;
+                            let _ = tokio::task::spawn_blocking(runner::dark).await;
                             published = None;
                         }
                         Some(Command::Source(name)) if sources.contains(&name) => {
@@ -241,12 +251,19 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 // it waits for whoever is starting or stopping a session.
                 let status = tokio::task::spawn_blocking(runner::status);
                 let status = status.await.unwrap_or_default();
-                // Not the panel: it is where "off" goes, so "on" with no effect
-                // must come back to something else.
+                // Not the dark grid: it is where "off" goes, so "on" with no
+                // effect must come back to something else.
                 if let Status::Running(effect) = &status
-                    && effect != PANEL
+                    && effect != DARK
                 {
                     last = effect.clone();
+                }
+                let answers = !matches!(status, Status::Failed { .. });
+                if connected != Some(answers) {
+                    tracing::debug!(answers, "launchpad availability");
+                    let said = if answers { "online" } else { "offline" };
+                    publish(&client, LAUNCHPAD, true, said.to_string());
+                    connected = Some(answers);
                 }
                 // A failure is logged by the session itself, when it happens.
                 if published.as_ref() != Some(&status) {
@@ -428,7 +445,9 @@ fn light_state(status: &Status) -> Value {
         Status::Mood(_) => {
             json!({"state": "ON", "effect": null, "color_mode": "onoff"})
         }
+        Status::Running(dark) if dark == DARK => json!({"state": "OFF"}),
         Status::Running(effect) => json!({"state": "ON", "effect": effect, "color_mode": "onoff"}),
+        // Failed reads unavailable in HA, through `LAUNCHPAD`; off is underneath it.
         Status::Idle | Status::Failed { .. } => json!({"state": "OFF"}),
     }
 }
@@ -448,6 +467,9 @@ fn discovery(effects: &[String], sources: &[String], moods: &[String]) -> Value 
             "command_topic": LIGHT_SET,
             "state_topic": LIGHT_STATE,
             "supported_color_modes": ["onoff"],
+            // Overrides the device's: the light also needs a Launchpad to answer.
+            "availability": [{"topic": AVAILABILITY}, {"topic": LAUNCHPAD}],
+            "availability_mode": "all",
             "effect": true,
             "effect_list": effect_list,
         },
@@ -495,7 +517,9 @@ fn discovery(effects: &[String], sources: &[String], moods: &[String]) -> Value 
             "sw_version": env!("CARGO_PKG_VERSION"),
         },
         "origin": {"name": "flash-dance", "url": "https://github.com/davidgomesdev/flash-dance"},
-        "availability_topic": AVAILABILITY,
+        // The list form, not `availability_topic`: the light overrides it with a list,
+        // and HA refuses an entity that ends up with both.
+        "availability": [{"topic": AVAILABILITY}],
         "components": components,
     })
 }
@@ -596,7 +620,7 @@ mod tests {
             .unwrap();
         assert_eq!(list.len(), effects.len() + 1);
         assert_eq!(list.last().unwrap(), PANEL);
-        assert!(effects.iter().all(|e| e != PANEL));
+        assert!(effects.iter().all(|e| e != PANEL && e != DARK));
         assert!(config["components"].get("source").is_none());
         assert!(config["components"].get("mood").is_none());
         assert_eq!(config["components"]["stop"]["state_topic"], STOP);
@@ -637,6 +661,29 @@ mod tests {
         assert_eq!(
             event_types(&[party.clone(), party]),
             vec!["Party".to_string()]
+        );
+    }
+
+    #[test]
+    fn dark_is_off_and_the_light_needs_a_launchpad() {
+        assert_eq!(
+            light_state(&Status::Running(DARK.into())),
+            json!({"state": "OFF"})
+        );
+        assert_eq!(
+            light_state(&Status::Running(PANEL.into()))["state"],
+            json!("ON")
+        );
+        let config = discovery(&[], &[], &[]);
+        let light = &config["components"]["light"];
+        assert_eq!(light["availability_mode"], "all");
+        assert_eq!(light["availability"][1]["topic"], LAUNCHPAD);
+        assert!(config.get("availability_topic").is_none());
+        assert!(
+            !light["effect_list"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(DARK))
         );
     }
 

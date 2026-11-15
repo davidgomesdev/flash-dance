@@ -276,11 +276,17 @@ The parts that are not obvious:
 - **One session, ever.** The Launchpad has one MIDI port and a session holds it.
   Starting one stops the last.
 - **The server always holds the device.** `runner::supervise`, started from
-  `main`, looks once a second: a session that has ended — Stop held on the device,
-  a crash, no Launchpad — is collected and the panel goes back on, retrying until
-  a Launchpad answers. So "stop", from the page or HA's "off", means *back to the
-  panel*, and the panel ignores a held Stop, since it would only come straight
-  back. A run of the same failure logs one error and then debug lines, and
+  `main`, looks once a second and collects a session that has ended. One that
+  *failed* — no Launchpad, most often — is started again as it was, every second
+  until a Launchpad answers, so dark comes back dark; one that ended on purpose
+  (Stop held) or crashed is replaced by the panel. So "stop" on the page means *back to the panel*, HA's
+  "off" means `dark` — `effects::dark`, the panel's loop with every LED off and
+  its presses still reported — and neither ends on a held Stop, since it would
+  only come straight back. The light needs `flash-dance/launchpad/availability`
+  as well as the Pi's own availability, so no Launchpad reads *unavailable*, not
+  off. Its `availability` list overrides the device's, which is why the device
+  uses the list form too: HA refuses an entity with both `availability` and
+  `availability_topic`. A run of the same failure logs one error and then debug lines, and
   `status()` reports it as `Failed` until a session has stayed up for a second.
   `runner::shutdown` clears the supervisor's flag *before* halting, and the
   supervisor checks it under the `RUNNING` lock, so nothing starts after exit
