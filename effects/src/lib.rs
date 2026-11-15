@@ -10,7 +10,8 @@
 //!   brighter or dimmer, which is the indicator.
 //! - **Left / right** change speed. The right column shows it, blue below 1x,
 //!   green at 1x, red above.
-//! - **Stop/Solo/Mute** (bottom of the right column) quits.
+//! - **Stop/Solo/Mute** (bottom of the right column), tapped, reports
+//!   [`Report::Stop`] and nothing else; held for [`HOLD`] seconds, it quits.
 //!
 //! A [`Marquee`] set from outside scrolls its text across once, over whatever is
 //! showing, then hands over to its effect or back to the one it interrupted.
@@ -43,6 +44,39 @@ const SCROLL: f32 = 10.0;
 
 fn quit_button() -> Pad {
     Pad::right(7) // bottom of the right column, "Stop/Solo/Mute"
+}
+
+/// Wall-clock seconds Stop/Solo/Mute must be held to quit. Anything shorter is a
+/// tap, which only reports [`Report::Stop`].
+pub const HOLD: f32 = 1.0;
+
+/// Tells a tap of Stop/Solo/Mute from a hold. Times are wall-clock, not virtual:
+/// how long a finger stays down has nothing to do with the speed setting.
+#[derive(Default)]
+struct QuitButton {
+    /// When it went down, while it is down.
+    down: Option<f32>,
+}
+
+impl QuitButton {
+    /// Takes every event; true if this one was a tap, released before [`HOLD`].
+    fn tapped(&mut self, event: Event, now: f32) -> bool {
+        match event {
+            Event::Press(button, _) if button == quit_button() => {
+                self.down = Some(now);
+                false
+            }
+            Event::Release(button) if button == quit_button() => {
+                self.down.take().is_some_and(|since| now - since < HOLD)
+            }
+            _ => false,
+        }
+    }
+
+    /// True once it has been held for [`HOLD`], without waiting for the release.
+    fn held(&self, now: f32) -> bool {
+        self.down.is_some_and(|since| now - since >= HOLD)
+    }
 }
 
 /// Discrete speeds, one per LED of the speed bar. Index 3 is normal.
@@ -703,6 +737,9 @@ pub enum Report {
     /// Every button event, controls included, as the device sent it, except the
     /// picker's and the moods': choosing one is not pressing a pad.
     Event(Event),
+    /// Stop/Solo/Mute was tapped: pressed and let go before [`HOLD`]. The session
+    /// carries on; holding it is what quits.
+    Stop,
 }
 
 /// A pad someone else names and colours, Home Assistant most likely, for
@@ -835,7 +872,8 @@ impl<'a> MoodMode<'a> {
 
 /// Runs a session on the device: `start` first, then whatever the picker chooses,
 /// with the arrows on speed and brightness and Session on `moods`, until
-/// Stop/Solo/Mute is pressed or `stop` is set. `source` is the audio source the
+/// Stop/Solo/Mute is held for [`HOLD`] or `stop` is set; a tap of it reports
+/// [`Report::Stop`]. `source` is the audio source the
 /// sound effects listen to, by any part of its name; `None` is whatever the machine
 /// is playing. `report` hears what is showing, each mood pressed and every button
 /// event, on the session's own thread. A [`Marquee`] put in `marquee` shows next.
@@ -870,6 +908,7 @@ pub fn run(
     // Global: both outlive a change of effect.
     let mut level = NORMAL_SPEED;
     let mut brightness = BRIGHTNESS.len() - 1;
+    let mut quit = QuitButton::default();
 
     app.reset(&mut pad)?;
     pad.set_brightness(BRIGHTNESS[brightness])?;
@@ -921,11 +960,15 @@ pub fn run(
                 }
                 _ => report(Report::Event(*event)),
             }
+            if quit.tapped(*event, now) {
+                println!("stop");
+                report(Report::Stop);
+            }
             let Event::Press(button, _) = *event else {
                 continue;
             };
             if button == quit_button() {
-                break 'running;
+                continue;
             }
             match nudge(button) {
                 Some(Nudge::Brightness(by)) => {
@@ -1000,6 +1043,9 @@ pub fn run(
             }
         }
 
+        if quit.held(now) {
+            break 'running;
+        }
         if moods.on {
             moods.draw(&mut pad, now)?;
         } else if let Some((text, since)) = &scrolling {
@@ -1033,8 +1079,8 @@ pub type Picture = [[[u8; 3]; 8]; 8];
 /// Runs a session that shows `picture` and nothing else: the grid as a panel that
 /// someone else paints, Home Assistant most likely. Session shows `moods` instead,
 /// as in [`run`], and pressing one leaves the picture for good. It redraws when the
-/// picture changes, reports every event like [`run`], and quits on Stop/Solo/Mute or
-/// `stop`, returning normally for the same reason [`run`] does. A [`Marquee`] put
+/// picture changes, reports every event like [`run`], and quits on Stop/Solo/Mute
+/// held or `stop`, a tap of it reporting [`Report::Stop`], returning normally for the same reason [`run`] does. A [`Marquee`] put
 /// in `marquee` scrolls first, and the picture comes back after it.
 pub fn panel(
     picture: &Mutex<Picture>,
@@ -1054,6 +1100,7 @@ pub fn panel(
     // False once a mood is pressed, which stops the panel like it stops an effect.
     let mut painting = true;
     let mut picked: Vec<Pad> = Vec::new();
+    let mut quit = QuitButton::default();
     pad.set_all([
         (quit_button(), Light::Solid(7)),
         (SESSION, Light::Rgb(30, 30, 30)),
@@ -1086,11 +1133,15 @@ pub fn panel(
                 }
                 _ => report(Report::Event(*event)),
             }
+            if quit.tapped(*event, now) {
+                println!("stop");
+                report(Report::Stop);
+            }
             let Event::Press(button, _) = *event else {
                 continue;
             };
             if button == quit_button() {
-                break 'running;
+                continue;
             }
             if button == SESSION {
                 scrolling = None;
@@ -1106,6 +1157,9 @@ pub fn panel(
                 painting = false;
                 report(Report::Mood(name));
             }
+        }
+        if quit.held(now) {
+            break 'running;
         }
         if moods.on {
             moods.draw(&mut pad, now)?;
@@ -1146,6 +1200,27 @@ fn grid(picture: &Picture) -> Grid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tap_of_stop_reports_and_a_hold_quits() {
+        let mut quit = QuitButton::default();
+        assert!(!quit.tapped(Event::Press(quit_button(), 127), 10.0));
+        assert!(!quit.held(10.5));
+        assert!(quit.tapped(Event::Release(quit_button()), 10.5));
+        assert!(!quit.held(20.0), "a released button is not held");
+
+        assert!(!quit.tapped(Event::Press(quit_button(), 127), 30.0));
+        assert!(
+            quit.held(30.0 + HOLD),
+            "quits without waiting for the release"
+        );
+        assert!(!quit.tapped(Event::Release(quit_button()), 31.5));
+
+        // Other buttons, and a release with no press before it, are not taps.
+        assert!(!quit.tapped(Event::Press(MENU, 127), 40.0));
+        assert!(!quit.tapped(Event::Release(MENU), 40.1));
+        assert!(!quit.tapped(Event::Release(quit_button()), 40.2));
+    }
 
     #[test]
     fn the_moods_blueprint_offers_every_effect() {

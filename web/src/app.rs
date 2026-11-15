@@ -248,7 +248,7 @@ fn Console() -> impl IntoView {
                 <p class="hint">
                     "Speed and brightness stay on the device: the arrows change them, "
                     <strong>"Stop/Solo/Mute"</strong>
-                    " quits."
+                    " held for a second quits; a tap only tells Home Assistant."
                 </p>
                 <form
                     class="marquee"

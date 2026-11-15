@@ -8,7 +8,7 @@ the machine is playing or hearing, `apps/*` are the things built on them, and
 `web/` is a website that runs them ([below](#the-website)).
 Most apps quit with the top-left button; `effects` and `snake` use the arrows for
 their own controls, so those two quit with **Stop/Solo/Mute** (bottom of the right
-column) instead.
+column) instead; in `effects`, by holding it for a second.
 
 | | |
 |---|---|
@@ -31,7 +31,9 @@ hit), lasers, gravity, pressure map.
 **Sound:** spectrum, pitch meter, beat rings, sound fire — see [Listening](#listening).
 
 Controls: **User** (top row, rightmost) opens the picker, **up/down** change
-brightness, **left/right** change speed, and **Stop/Solo/Mute** quits. The right
+brightness, **left/right** change speed, and **Stop/Solo/Mute** held for a second
+quits. A tap of it quits nothing: it sends a stop event, which Home Assistant sees
+as `event.launchpad_stop`. The right
 column shows the speed — blue below 1x, green at 1x, red above. Brightness needs no
 indicator, since the whole grid is one.
 

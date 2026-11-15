@@ -403,7 +403,8 @@ amidi -p hw:2,0,1 -S 'F0 00 20 29 02 0D 0E 00 F7'   # back to standalone mode
 ```
 
 Every app has a quit button — top-left, except `effects` and `snake`, which use the
-arrows for their own controls and so quit with Stop/Solo/Mute (`Pad::right(7)`).
+arrows for their own controls and so quit with Stop/Solo/Mute (`Pad::right(7)`),
+which `effects` wants held for `HOLD` (a second): a tap only reports `Report::Stop`.
 Prefer it over Ctrl+C.
 
 ## Repo conventions
