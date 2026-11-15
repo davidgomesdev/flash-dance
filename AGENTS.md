@@ -284,7 +284,14 @@ The parts that are not obvious:
 - The session's error is a `String` by the time it reaches the page, because the
   library's `Box<dyn Error>` is not `Send` and cannot leave the thread.
 - A `kill -9` of the server leaves the device lit, like any app. Ctrl+C is fine:
-  the shutdown hook stops the session first.
+  the shutdown hook stops the session first. A second Ctrl+C exits at once, for
+  when something in shutdown hangs, and can leave the device lit too.
+- **Nothing in shutdown may wait without a limit.** OpenTelemetry's
+  `TracerProvider::shutdown` blocks its thread until the exporter flushes, and
+  called from the async shutdown hook with no collector listening it never
+  returned, so Ctrl+C hung. It runs on its own thread with a 2 s limit now, Loki's
+  flush has the same limit, and the MQTT bridge's 5 s reconnect wait listens for
+  the stop.
 - The web crate defaults to the `ssr` feature so an ordinary `cargo build
   --workspace` builds the server and nothing has to know about cargo-leptos, which
   passes the features itself for each of its two builds. The effects library is an
