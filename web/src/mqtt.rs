@@ -1,7 +1,7 @@
 //! Home Assistant, over MQTT: the Launchpad as a device HA discovers by itself.
 //!
 //! - a **light** whose effect list is every effect plus [`PANEL`]: on starts one,
-//!   off stops the session;
+//!   off goes back to the panel, since the server always holds the device;
 //! - a **select** for the audio source the sound effects listen to;
 //! - an **event** entity, `event.launchpad_pad`, firing on every grid press and
 //!   release with its `x`, `y` and velocity;
@@ -241,7 +241,11 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 // it waits for whoever is starting or stopping a session.
                 let status = tokio::task::spawn_blocking(runner::status);
                 let status = status.await.unwrap_or_default();
-                if let Status::Running(effect) = &status {
+                // Not the panel: it is where "off" goes, so "on" with no effect
+                // must come back to something else.
+                if let Status::Running(effect) = &status
+                    && effect != PANEL
+                {
                     last = effect.clone();
                 }
                 // A failure is logged by the session itself, when it happens.

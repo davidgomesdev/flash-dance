@@ -275,9 +275,19 @@ The parts that are not obvious:
   gracefully; there is no such thing that also runs `Drop`.
 - **One session, ever.** The Launchpad has one MIDI port and a session holds it.
   Starting one stops the last.
-- **The page polls, and the grid must sit under a `Transition`.** A session can end
-  without the server asking — the device's own Stop/Solo/Mute, or no Launchpad
-  plugged in — so the page asks every 1.5 s. Every card reads that status for its
+- **The server always holds the device.** `runner::supervise`, started from
+  `main`, looks once a second: a session that has ended — Stop held on the device,
+  a crash, no Launchpad — is collected and the panel goes back on, retrying until
+  a Launchpad answers. So "stop", from the page or HA's "off", means *back to the
+  panel*, and the panel ignores a held Stop, since it would only come straight
+  back. A run of the same failure logs one error and then debug lines, and
+  `status()` reports it as `Failed` until a session has stayed up for a second.
+  `runner::shutdown` clears the supervisor's flag *before* halting, and the
+  supervisor checks it under the `RUNNING` lock, so nothing starts after exit
+  has begun.
+- **The page polls, and the grid must sit under a `Transition`.** What is showing can
+  change without the server asking — the device's own picker, Stop held, a
+  Launchpad unplugged — so the page asks every 1.5 s. Every card reads that status for its
   highlight, and a `Suspense` falls back on *every* reload of what it reads: under
   one, each poll tore down and rebuilt all eighteen cards, which looked like the
   page refreshing itself. A `Transition` only falls back on the first load.
@@ -327,9 +337,9 @@ device, so the one-session rule and the joining stop hold for it too.
 - **`try_publish`, never `publish`.** The bridge is the loop that drains rumqttc's
   queue; awaiting room in it from that loop would wait forever.
 - **State is polled once a second**, not pushed, so a session ended on the device
-  or started from the website still reaches HA. `status()` reports a failed session
-  once, then idle. The session logs its own error
-  the moment it fails, so neither the bridge nor the page logs it again.
+  or started from the website still reaches HA. `status()` reports the failure the
+  supervisor is retrying, if any. The session logs its own error the moment it
+  fails, so neither the bridge nor the page logs it again.
 - `rumqttc` is built without default features: no TLS, so no rustls tree on the
   Pi. Turn `use-rustls` on if a broker ever needs it.
 

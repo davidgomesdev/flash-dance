@@ -49,6 +49,11 @@ pub struct MoodInfo {
     pub rgb: [u8; 3],
 }
 
+/// The session that is not an effect: the grid as a panel Home Assistant paints,
+/// and what the server falls back to. Started by name like any effect, which no
+/// effect name collides with.
+pub const PANEL: &str = "panel";
+
 /// What the server's effect session is doing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Status {
@@ -180,8 +185,8 @@ fn Console() -> impl IntoView {
     // Which of the device's two modes the page shows, as User and Session do there.
     let (on_moods, set_on_moods) = signal(false);
 
-    // The effect can also stop itself — Stop/Solo/Mute on the device, or a crash
-    // because nothing is plugged in — so the page asks rather than assumes.
+    // What is showing can also change on the device — its picker, Stop held, a
+    // Launchpad unplugged — so the page asks rather than assumes.
     Effect::new(move |_| {
         let versions = (
             start.version().get(),
@@ -252,7 +257,7 @@ fn Console() -> impl IntoView {
                 <p class="hint">
                     "Speed and brightness stay on the device: the arrows change them, "
                     <strong>"Stop/Solo/Mute"</strong>
-                    " held for five seconds quits; a tap only tells Home Assistant."
+                    " held for five seconds goes back to the panel; a tap only tells Home Assistant."
                 </p>
                 <form
                     class="marquee"
@@ -475,13 +480,20 @@ fn StatusBar(
             <Transition fallback=|| view! { <span class="dot idle"></span> }>
                 {move || {
                     let status = status.get().unwrap_or_default();
-                    let running = matches!(status, Status::Running(_) | Status::Mood(_));
+                    // Stop goes back to the panel, so there is nothing to stop on it.
+                    let running = matches!(
+                        &status, Status::Running(name) if name != PANEL
+                    ) || matches!(status, Status::Mood(_));
                     let (class, text) = match &status {
                         Status::Idle => ("idle", "Nothing running.".to_string()),
+                        Status::Running(name) if name == PANEL => {
+                            ("live", "Showing the panel.".to_string())
+                        }
                         Status::Running(effect) => ("live", format!("Running {effect}.")),
                         Status::Mood(name) => ("live", format!("Mood {name}.")),
-                        Status::Failed { effect, error } => {
-                            ("failed", format!("{effect} stopped: {error}"))
+                        // The server retries every second, so this clears by itself.
+                        Status::Failed { error, .. } => {
+                            ("failed", format!("Waiting for the Launchpad: {error}"))
                         }
                     };
                     view! {
