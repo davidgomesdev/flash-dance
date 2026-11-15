@@ -7,15 +7,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use flash_dance_effects::{EFFECTS, Marquee, Mood, Moods, Picture, Report};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::app::{EffectInfo, MoodInfo, SourceInfo, Status};
 
-/// The session that is not an effect: the grid as a panel, showing [`PICTURE`].
-/// Started by name like any effect, which no effect name collides with.
-pub const PANEL: &str = "panel";
+/// The session that is not an effect, showing [`PICTURE`]; defined beside
+/// [`Status`] so the page can tell it apart too.
+pub use crate::app::PANEL;
 
 /// What the panel shows. Painted from outside (Home Assistant, over MQTT) whether
 /// or not the panel is running, so switching to it shows the latest picture at once.
@@ -38,6 +39,18 @@ static SOURCES_ERROR: Mutex<Option<String>> = Mutex::new(None);
 /// open, so exactly one effect can run at a time — starting one stops the last.
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
 
+/// While set, [`supervise`] keeps a session on the device: the server always
+/// controls the Launchpad, falling back to the panel. Cleared by [`shutdown`].
+static SUPERVISING: AtomicBool = AtomicBool::new(false);
+
+/// How often the supervisor looks, and so how soon a plugged-in Launchpad lights.
+const RETRY: Duration = Duration::from_secs(1);
+
+/// The last session that failed and its error, until a session stays up: what the
+/// page and Home Assistant are told while there is no Launchpad, and how the
+/// supervisor knows a failure is a repeat, logged at debug rather than error.
+static FAILURE: Mutex<Option<(String, String)>> = Mutex::new(None);
+
 struct Running {
     /// What is on the grid now, as [`Status::Running`] or [`Status::Mood`]: the
     /// panel, the effect last picked — on the device's own picker too, which is why
@@ -46,6 +59,9 @@ struct Running {
     stop: Arc<AtomicBool>,
     /// The error is a `String` because the library's is not `Send`.
     thread: JoinHandle<Result<(), String>>,
+    /// A session alive [`RETRY`] after this has connected: a missing Launchpad
+    /// fails within milliseconds.
+    started: Instant,
 }
 
 fn running() -> MutexGuard<'static, Option<Running>> {
@@ -160,6 +176,19 @@ fn news(last: &mut Option<String>, error: Option<&String>) -> Option<News> {
 /// was running first. `source` is the audio source for the sound effects; the
 /// others ignore it.
 pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
+    let mut running = running();
+    start_on(&mut running, name, source, false)?;
+    Ok(state(&running))
+}
+
+/// [`start`], under the lock the caller holds. `retry` is the supervisor trying
+/// again after a failure, which says so at debug rather than info.
+fn start_on(
+    running: &mut Option<Running>,
+    name: &str,
+    source: Option<&str>,
+    retry: bool,
+) -> Result<(), String> {
     let effect = EFFECTS.into_iter().find(|effect| effect.name() == name);
     if effect.is_none() && name != PANEL {
         tracing::warn!("cannot start {name:?}: there is no such effect");
@@ -167,9 +196,12 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     }
     let source = source.filter(|s| !s.is_empty()).map(String::from);
 
-    let mut running = running();
-    halt(&mut running);
-    tracing::info!(source = source.as_deref(), "starting {name}");
+    halt(running);
+    if retry {
+        tracing::debug!("retrying {name}");
+    } else {
+        tracing::info!(source = source.as_deref(), "starting {name}");
+    }
     // A press or marquee meant for the session just stopped is not one for this.
     lock(&MOODS).pressed = None;
     *lock(&MARQUEE) = None;
@@ -213,7 +245,17 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
             match &ended {
                 Ok(()) if flag.load(Ordering::Relaxed) => tracing::info!("{session} stopped"),
                 Ok(()) => tracing::info!("{session} ended on the device"),
-                Err(error) => tracing::error!("{session} failed: {error}"),
+                Err(error) => {
+                    let mut failure = lock(&FAILURE);
+                    // The supervisor retries every second while the Launchpad is
+                    // missing; only the first of a run of the same error is news.
+                    if failure.as_ref().is_some_and(|(_, seen)| seen == error) {
+                        tracing::debug!("{session} failed again: {error}");
+                    } else {
+                        tracing::error!("{session} failed: {error}");
+                    }
+                    *failure = Some((session.clone(), error.clone()));
+                }
             }
             ended
         })
@@ -225,8 +267,9 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         showing,
         stop,
         thread,
+        started: Instant::now(),
     });
-    Ok(state(&mut running))
+    Ok(())
 }
 
 /// Presses a mood as if on the device, starting a session on the first effect if
@@ -280,13 +323,77 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
     Ok(status())
 }
 
+/// Back to the panel: what "stop" means when the server always holds the device.
 pub fn stop() -> Status {
-    halt(&mut running());
-    Status::Idle
+    let mut running = running();
+    // The panel cannot fail to be found, only to connect, and that is the status.
+    let _ = start_on(&mut running, PANEL, None, false);
+    state(&running)
 }
 
 pub fn status() -> Status {
-    state(&mut running())
+    state(&running())
+}
+
+/// Keeps a session on the device from now until [`shutdown`]: the panel at once,
+/// and again whenever a session ends — held Stop on the device, a crash, a
+/// Launchpad that is missing or was unplugged, which it retries every [`RETRY`].
+pub fn supervise() {
+    SUPERVISING.store(true, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new()
+        .name("supervisor".to_string())
+        .spawn(|| {
+            loop {
+                {
+                    let mut running = running();
+                    // Checked under the lock `shutdown` takes after clearing it, so
+                    // nothing starts once shutdown has stopped the session.
+                    if !SUPERVISING.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    look_after(&mut running);
+                }
+                std::thread::sleep(RETRY);
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::error!("cannot start the supervisor: {error}");
+    }
+}
+
+/// One look: a session still up for a while has connected, which ends any
+/// failure; one that has ended is collected and the panel goes back on.
+fn look_after(running: &mut Option<Running>) {
+    if let Some(current) = running.as_ref()
+        && !current.thread.is_finished()
+    {
+        if current.started.elapsed() >= RETRY && lock(&FAILURE).take().is_some() {
+            tracing::info!("the Launchpad is back");
+        }
+        return;
+    }
+    // Ended: how is already logged by the session, except a crash.
+    let ended = running.take();
+    let something_ended = ended.is_some();
+    if let Some(ended) = ended
+        && ended.thread.join().is_err()
+    {
+        tracing::error!("the session crashed");
+        *lock(&FAILURE) = Some(("the session".to_string(), "it crashed".to_string()));
+    }
+    // Nothing ended at boot, and a retry says so at debug in `start_on`.
+    let retry = lock(&FAILURE).is_some();
+    if something_ended && !retry {
+        tracing::info!("back to the panel");
+    }
+    let _ = start_on(running, PANEL, None, retry);
+}
+
+/// Stops the supervisor, then the session, so its `Drop` releases the device and
+/// nothing puts another on it. For the server's exit.
+pub fn shutdown() {
+    SUPERVISING.store(false, Ordering::Relaxed);
+    halt(&mut running());
 }
 
 /// Sets the session's stop flag and waits for it to return, which takes at most a
@@ -310,33 +417,18 @@ fn halt(running: &mut Option<Running>) {
     }
 }
 
-/// What the session is doing, collecting it if it has ended. Ending cleanly is the
-/// device's own Stop/Solo/Mute; anything else — no Launchpad plugged in, most
-/// often — goes on the page.
-fn state(running: &mut Option<Running>) -> Status {
-    let Some(current) = running.as_ref() else {
-        return Status::Idle;
-    };
-    let showing = lock(&current.showing).clone();
-    if !current.thread.is_finished() {
-        return showing;
+/// What is on the device: the session's, while one is up; otherwise the failure
+/// the supervisor is retrying, if there is one. Idle is only ever brief — between
+/// a session ending and the supervisor's next look — or after [`shutdown`].
+fn state(running: &Option<Running>) -> Status {
+    if let Some(current) = running
+        && !current.thread.is_finished()
+    {
+        return lock(&current.showing).clone();
     }
-    let effect = match showing {
-        Status::Mood(name) => format!("mood {name}"),
-        Status::Running(effect) => effect,
-        Status::Idle | Status::Failed { .. } => unreachable!("never stored as showing"),
-    };
-    let ended = running.take().expect("checked above");
-    match ended.thread.join() {
-        Ok(Ok(())) => Status::Idle,
-        Ok(Err(error)) => Status::Failed { effect, error },
-        Err(_) => {
-            tracing::error!("{effect} crashed");
-            Status::Failed {
-                effect,
-                error: "the effect crashed".to_string(),
-            }
-        }
+    match lock(&FAILURE).clone() {
+        Some((effect, error)) => Status::Failed { effect, error },
+        None => Status::Idle,
     }
 }
 

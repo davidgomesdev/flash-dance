@@ -31,9 +31,9 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("cannot listen on {address}: {e}"));
     tracing::info!("flash-dance on http://{address}");
-    if let Err(e) = flash_dance_web::runner::start(flash_dance_web::runner::PANEL, None) {
-        tracing::warn!("cannot start the panel: {e}");
-    }
+    // From here on the server always has the device: the panel, until something
+    // else is picked, and back to it whenever that ends.
+    flash_dance_web::runner::supervise();
     let bridge = flash_dance_web::mqtt::options().map(|options| {
         let (stop, stopped) = tokio::sync::oneshot::channel();
         (
@@ -61,10 +61,11 @@ async fn main() {
                 let _ = stop.send(());
                 let _ = bridge.await;
             }
-            // Stop the session and wait for it, so its `Drop` clears the LEDs and
-            // leaves programmer mode before the process goes. A SIGKILL skips this
-            // and leaves the device lit — nothing in-process can help with that.
-            flash_dance_web::runner::stop();
+            // Stop the supervisor and the session and wait for it, so its `Drop`
+            // clears the LEDs and leaves programmer mode before the process goes. A
+            // SIGKILL skips this and leaves the device lit — nothing in-process can
+            // help with that.
+            flash_dance_web::runner::shutdown();
             telemetry.shutdown().await;
         })
         .await

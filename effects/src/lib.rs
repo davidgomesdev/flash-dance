@@ -1079,9 +1079,11 @@ pub type Picture = [[[u8; 3]; 8]; 8];
 /// Runs a session that shows `picture` and nothing else: the grid as a panel that
 /// someone else paints, Home Assistant most likely. Session shows `moods` instead,
 /// as in [`run`], and pressing one leaves the picture for good. It redraws when the
-/// picture changes, reports every event like [`run`], and quits on Stop/Solo/Mute
-/// held or `stop`, a tap of it reporting [`Report::Stop`], returning normally for the same reason [`run`] does. A [`Marquee`] put
-/// in `marquee` scrolls first, and the picture comes back after it.
+/// picture changes, reports every event like [`run`], and quits only on `stop`: it
+/// is what a session falls back to, so holding Stop/Solo/Mute does not end it, and a
+/// tap of it still reports [`Report::Stop`]. It returns normally for the same
+/// reason [`run`] does. A [`Marquee`] put in `marquee` scrolls first, and the
+/// picture comes back after it.
 pub fn panel(
     picture: &Mutex<Picture>,
     moods: &Mutex<Moods>,
@@ -1160,10 +1162,6 @@ pub fn panel(
                 tracing::info!("mood {name} pressed");
                 report(Report::Mood(name));
             }
-        }
-        if quit.held(now) {
-            tracing::info!("stop held; quitting");
-            break 'running;
         }
         if moods.on {
             moods.draw(&mut pad, now)?;
