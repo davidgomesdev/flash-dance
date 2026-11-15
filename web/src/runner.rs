@@ -31,6 +31,9 @@ static MARQUEE: Mutex<Option<Marquee>> = Mutex::new(None);
 /// Who hears the button events and mood presses of whatever session is running.
 static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
 
+/// The last error listing audio sources, so [`sources`] warns only when it changes.
+static SOURCES_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
 /// The one session. The Launchpad has a single MIDI port and a session holds it
 /// open, so exactly one effect can run at a time — starting one stops the last.
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
@@ -114,8 +117,15 @@ pub fn effects() -> Vec<EffectInfo> {
 /// Capture sources, system sound first — that is what most people want to see the
 /// sound effects react to.
 pub fn sources() -> Vec<SourceInfo> {
-    let mut sources: Vec<SourceInfo> = flash_dance_audio::sources()
-        .inspect_err(|error| tracing::warn!("cannot list audio sources: {error}"))
+    let listed = flash_dance_audio::sources().map_err(|error| error.to_string());
+    // Said once per change: the bridge rescans every 30 s, and a machine with no
+    // sound server would otherwise warn on every one.
+    match news(&mut lock(&SOURCES_ERROR), listed.as_ref().err()) {
+        Some(News::Failing(error)) => tracing::warn!("cannot list audio sources: {error}"),
+        Some(News::Recovered) => tracing::info!("audio sources can be listed again"),
+        None => {}
+    }
+    let mut sources: Vec<SourceInfo> = listed
         .unwrap_or_default()
         .into_iter()
         .map(|source| SourceInfo {
@@ -125,6 +135,25 @@ pub fn sources() -> Vec<SourceInfo> {
         .collect();
     sources.sort_by_key(|source| !source.monitor);
     sources
+}
+
+#[derive(Debug, PartialEq)]
+enum News {
+    Failing(String),
+    Recovered,
+}
+
+/// What is worth saying about this listing, given the error the last one had:
+/// a new or different error, or the first success after one. `last` becomes this
+/// listing's error.
+fn news(last: &mut Option<String>, error: Option<&String>) -> Option<News> {
+    let said = match (error, last.as_ref()) {
+        (Some(error), seen) if seen != Some(error) => Some(News::Failing(error.clone())),
+        (None, Some(_)) => Some(News::Recovered),
+        _ => None,
+    };
+    *last = error.cloned();
+    said
 }
 
 /// Starts an effect by its exact name, or the panel as [`PANEL`], stopping whatever
@@ -308,5 +337,28 @@ fn state(running: &mut Option<Running>) -> Status {
                 error: "the effect crashed".to_string(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failing_source_list_is_news_once_per_change() {
+        let (down, other) = ("no pactl".to_string(), "pactl failed".to_string());
+        let mut last = None;
+        assert_eq!(news(&mut last, None), None);
+        assert_eq!(
+            news(&mut last, Some(&down)),
+            Some(News::Failing(down.clone()))
+        );
+        assert_eq!(news(&mut last, Some(&down)), None, "the same error again");
+        assert_eq!(
+            news(&mut last, Some(&other)),
+            Some(News::Failing(other.clone()))
+        );
+        assert_eq!(news(&mut last, None), Some(News::Recovered));
+        assert_eq!(news(&mut last, None), None);
     }
 }
