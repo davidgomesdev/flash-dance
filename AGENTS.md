@@ -320,7 +320,8 @@ device, so the one-session rule and the joining stop hold for it too.
   queue; awaiting room in it from that loop would wait forever.
 - **State is polled once a second**, not pushed, so a session ended on the device
   or started from the website still reaches HA. `status()` reports a failed session
-  once, then idle — the bridge logs the error on that one tick.
+  once, then idle. The session logs its own error
+  the moment it fails, so neither the bridge nor the page logs it again.
 - `rumqttc` is built without default features: no TLS, so no rustls tree on the
   Pi. Turn `use-rustls` on if a broker ever needs it.
 

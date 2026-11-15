@@ -47,6 +47,7 @@ async fn main() {
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
+            tracing::info!("shutting down");
             // The bridge first, so no "on" from HA starts a session after the stop.
             if let Some((stop, bridge)) = bridge {
                 let _ = stop.send(());

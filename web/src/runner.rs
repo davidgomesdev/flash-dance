@@ -59,6 +59,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Sets pads of the panel's picture, `x` from the left and `y` from the top, under
 /// one lock so the panel never shows half of them. Off-grid pads are ignored.
 pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
+    tracing::debug!(pads = pads.len(), "painting the panel");
     let mut picture = lock(&PICTURE);
     for &(x, y, rgb) in pads {
         if let Some(pad) = picture.get_mut(y).and_then(|row| row.get_mut(x)) {
@@ -69,6 +70,8 @@ pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
 
 /// Replaces the moods Session shows; a running session shows the new list at once.
 pub fn set_moods(moods: Vec<Mood>) {
+    let names: Vec<&str> = moods.iter().map(|mood| mood.name.as_str()).collect();
+    tracing::info!(?names, "moods set");
     lock(&MOODS).list = moods;
 }
 
@@ -111,7 +114,9 @@ pub fn effects() -> Vec<EffectInfo> {
 /// Capture sources, system sound first — that is what most people want to see the
 /// sound effects react to.
 pub fn sources() -> Vec<SourceInfo> {
+    // Debug, not warn: with no sound server this fails on every rescan.
     let mut sources: Vec<SourceInfo> = flash_dance_audio::sources()
+        .inspect_err(|error| tracing::debug!("cannot list audio sources: {error}"))
         .unwrap_or_default()
         .into_iter()
         .map(|source| SourceInfo {
@@ -129,12 +134,14 @@ pub fn sources() -> Vec<SourceInfo> {
 pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     let effect = EFFECTS.into_iter().find(|effect| effect.name() == name);
     if effect.is_none() && name != PANEL {
+        tracing::warn!("cannot start {name:?}: there is no such effect");
         return Err(format!("there is no effect called {name:?}"));
     }
     let source = source.filter(|s| !s.is_empty()).map(String::from);
 
     let mut running = running();
     halt(&mut running);
+    tracing::info!(source = source.as_deref(), "starting {name}");
     // A press or marquee meant for the session just stopped is not one for this.
     lock(&MOODS).pressed = None;
     *lock(&MARQUEE) = None;
@@ -145,10 +152,19 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     )));
     let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
     let report = move |report| match report {
-        Report::Showing(effect) => *lock(&shown) = Status::Running(effect.name().to_string()),
+        Report::Showing(effect) => {
+            tracing::info!("showing {}", effect.name());
+            *lock(&shown) = Status::Running(effect.name().to_string())
+        }
         heard => {
-            if let Report::Mood(name) = &heard {
-                *lock(&shown) = Status::Mood(name.clone());
+            match &heard {
+                Report::Mood(name) => {
+                    tracing::info!("mood {name} pressed");
+                    *lock(&shown) = Status::Mood(name.clone());
+                }
+                Report::Stop => tracing::info!("stop tapped"),
+                Report::Event(event) => tracing::debug!(?event, "button"),
+                Report::Showing(_) => {}
             }
             // Nobody listening, or the listener gone, is not the session's problem.
             if let Some(listener) = lock(&LISTENER).as_ref() {
@@ -156,10 +172,11 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
             }
         }
     };
+    let session = name.to_string();
     let thread = std::thread::Builder::new()
         .name(format!("effect: {name}"))
         .spawn(move || {
-            match effect {
+            let ended = match effect {
                 Some(effect) => flash_dance_effects::run(
                     effect,
                     source.as_deref(),
@@ -170,9 +187,20 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
                 ),
                 None => flash_dance_effects::panel(&PICTURE, &MOODS, &MARQUEE, &flag, report),
             }
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+            // Logged here rather than when `state` collects it, so it is on time
+            // and once, whoever ends up asking.
+            match &ended {
+                Ok(()) if flag.load(Ordering::Relaxed) => tracing::info!("{session} stopped"),
+                Ok(()) => tracing::info!("{session} ended on the device"),
+                Err(error) => tracing::error!("{session} failed: {error}"),
+            }
+            ended
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!("cannot start a thread for {name}: {e}");
+            e.to_string()
+        })?;
     *running = Some(Running {
         showing,
         stop,
@@ -185,8 +213,10 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
 /// none is running: the session is what shows it, and what tells Home Assistant.
 pub fn press_mood(name: &str, source: Option<&str>) -> Result<Status, String> {
     if !lock(&MOODS).list.iter().any(|s| s.name == name) {
+        tracing::warn!("cannot press {name:?}: there is no such mood");
         return Err(format!("there is no mood called {name:?}"));
     }
+    tracing::info!("pressing mood {name}");
     if !matches!(status(), Status::Running(_) | Status::Mood(_)) {
         start(EFFECTS[0].name(), source)?;
     }
@@ -222,6 +252,7 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
             start(PANEL, source)?;
         }
     }
+    tracing::info!(then = then.map(|e| e.name()), "marquee {text:?}");
     *lock(&MARQUEE) = Some(Marquee {
         text: text.to_string(),
         then,
@@ -243,6 +274,14 @@ pub fn status() -> Status {
 /// clears the LEDs and hands the MIDI port back for the next effect to open.
 fn halt(running: &mut Option<Running>) {
     if let Some(current) = running.take() {
+        // One that already ended has said so itself.
+        if !current.thread.is_finished() {
+            match &*lock(&current.showing) {
+                Status::Mood(name) => tracing::info!("stopping mood {name}"),
+                Status::Running(name) => tracing::info!("stopping {name}"),
+                Status::Idle | Status::Failed { .. } => {}
+            }
+        }
         current.stop.store(true, Ordering::Relaxed);
         let _ = current.thread.join();
     }

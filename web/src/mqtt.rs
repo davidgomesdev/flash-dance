@@ -97,6 +97,8 @@ fn address(value: &str) -> Option<(String, u16)> {
 /// The bridge, until `stop`: reconnecting when the broker goes away, publishing the
 /// light's state when the session changes, whoever changed it.
 pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
+    let (host, port) = options.broker_address();
+    tracing::info!("connecting to {host}:{port}");
     let (client, mut events) = AsyncClient::new(options, 64);
     let mut presses = runner::listen();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
@@ -116,7 +118,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
         tokio::select! {
             event = events.poll() => match event {
                 Ok(Mqtt::Incoming(Packet::ConnAck(_))) => {
-                    tracing::info!("connected");
+                    tracing::info!("connected to {host}:{port}");
                     // A fresh session every time, so subscriptions do not survive a
                     // reconnect and are made again here.
                     for topic in [LIGHT_SET, SOURCE_SET, GRID, MOODS_SET, MARQUEE_SET, HA_STATUS] {
@@ -126,15 +128,18 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     published = None;
                 }
                 Ok(Mqtt::Incoming(Packet::Publish(message))) => {
+                    tracing::debug!(bytes = message.payload.len(), "received on {}", message.topic);
                     match command(&message.topic, &message.payload) {
                         Some(Command::On(effect)) => {
                             let effect = effect.unwrap_or_else(|| last.clone());
+                            tracing::info!("Home Assistant: on, {effect}");
                             let source = source.clone();
                             // `start` joins the old session, which can take a frame.
                             let started = tokio::task::spawn_blocking(move || {
                                 // HA sends "on" to a light already on (scenes do);
                                 // restarting would reset its speed and brightness.
                                 if runner::status() == Status::Running(effect.clone()) {
+                                    tracing::debug!("{effect} is already showing; left alone");
                                     return Ok(());
                                 }
                                 runner::start(&effect, Some(&source)).map(drop)
@@ -145,6 +150,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                             published = None;
                         }
                         Some(Command::Marquee { text, then }) => {
+                            tracing::info!("Home Assistant: marquee");
                             let source = source.clone();
                             // Like "on": it may start a session, joining the old one.
                             let shown = tokio::task::spawn_blocking(move || {
@@ -156,10 +162,12 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                             published = None;
                         }
                         Some(Command::Off) => {
+                            tracing::info!("Home Assistant: off");
                             let _ = tokio::task::spawn_blocking(runner::stop).await;
                             published = None;
                         }
                         Some(Command::Source(name)) if sources.contains(&name) => {
+                            tracing::info!("Home Assistant: audio source {name}");
                             source = name;
                             publish(&client, SOURCE_STATE, true, source.clone());
                         }
@@ -173,6 +181,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                             }
                         }
                         Some(Command::Announce) => {
+                            tracing::info!("Home Assistant came online; announcing again");
                             announce(&client, &sources, &source, &moods);
                             published = None;
                         }
@@ -208,6 +217,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 });
                 let found = found.await.unwrap_or_default();
                 if found != sources {
+                    tracing::info!(?found, "audio sources changed");
                     sources = found;
                     if !sources.contains(&source) {
                         source = sources.first().cloned().unwrap_or_default();
@@ -224,16 +234,15 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 if let Status::Running(effect) = &status {
                     last = effect.clone();
                 }
-                // Seen once: `status` collects an ended session, then reports idle.
-                if let Status::Failed { effect, error } = &status {
-                    tracing::error!("{effect} stopped: {error}");
-                }
+                // A failure is logged by the session itself, when it happens.
                 if published.as_ref() != Some(&status) {
+                    tracing::debug!(?status, "light state");
                     publish(&client, LIGHT_STATE, true, light_state(&status).to_string());
                     published = Some(status);
                 }
             }
             _ = &mut stop => {
+                tracing::info!("disconnecting from {host}:{port}");
                 // A clean disconnect sends no last will, so say it here: off, and gone.
                 publish(&client, LIGHT_STATE, true, light_state(&Status::Idle).to_string());
                 publish(&client, AVAILABILITY, true, "offline".to_string());
@@ -255,6 +264,7 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
 /// `try_publish`, not `publish`: the loop that drains the queue is the one calling,
 /// so waiting for room in it would wait forever. A full queue drops the message.
 fn publish(client: &AsyncClient, topic: &str, retain: bool, payload: String) {
+    tracing::debug!(retain, bytes = payload.len(), "publishing on {topic}");
     if let Err(error) = client.try_publish(topic, QoS::AtLeastOnce, retain, payload) {
         tracing::error!("could not publish on {topic}: {error}");
     }
@@ -263,6 +273,11 @@ fn publish(client: &AsyncClient, topic: &str, retain: bool, payload: String) {
 /// Everything HA needs to (re)build the device, and the Pi's cue for it to repaint.
 fn announce(client: &AsyncClient, sources: &[String], source: &str, moods: &[String]) {
     let names: Vec<String> = runner::effects().into_iter().map(|e| e.name).collect();
+    tracing::info!(
+        sources = sources.len(),
+        moods = moods.len(),
+        "announcing the device to Home Assistant"
+    );
     publish(
         client,
         DISCOVERY,

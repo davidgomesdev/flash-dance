@@ -82,11 +82,13 @@ pub async fn list_moods() -> Result<Vec<MoodInfo>, ServerFnError> {
 
 #[server]
 pub async fn press_mood(mood: String, source: String) -> Result<Status, ServerFnError> {
+    tracing::debug!("website: press mood {mood}");
     crate::runner::press_mood(&mood, Some(source.as_str())).map_err(ServerFnError::new)
 }
 
 #[server]
 pub async fn start_effect(effect: String, source: String) -> Result<Status, ServerFnError> {
+    tracing::debug!("website: start {effect}");
     crate::runner::start(&effect, Some(source.as_str())).map_err(ServerFnError::new)
 }
 
@@ -97,12 +99,14 @@ pub async fn show_marquee(
     effect: Option<String>,
     source: String,
 ) -> Result<Status, ServerFnError> {
+    tracing::debug!("website: marquee");
     crate::runner::marquee(&text, effect.as_deref(), Some(source.as_str()))
         .map_err(ServerFnError::new)
 }
 
 #[server]
 pub async fn stop_effect() -> Result<Status, ServerFnError> {
+    tracing::debug!("website: stop");
     Ok(crate::runner::stop())
 }
 
