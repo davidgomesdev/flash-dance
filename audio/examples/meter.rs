@@ -8,9 +8,12 @@
 use flash_dance_audio::{Audio, Result};
 
 fn main() -> Result<()> {
+    // The library logs "listening to …" itself.
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
     let want = std::env::args().nth(1);
     let mut audio = Audio::open(want.as_deref())?;
-    eprintln!("listening to {}", audio.source());
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(33));
@@ -25,7 +28,7 @@ fn main() -> Result<()> {
                     .unwrap_or('#')
             })
             .collect();
-        println!(
+        tracing::info!(
             "pitch {:.2}  bands {bars}  {}",
             sound.pitch,
             if sound.beat { "beat" } else { "" }

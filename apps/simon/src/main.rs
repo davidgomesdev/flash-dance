@@ -42,6 +42,7 @@ enum Phase {
 }
 
 fn main() -> Result<()> {
+    flash_dance::init_logging();
     let (mut pad, events) = Launchpad::connect()?;
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
@@ -53,7 +54,7 @@ fn main() -> Result<()> {
         step: 0,
         since: 0.0,
     };
-    println!("Watch, then repeat. Top-left quits.");
+    tracing::info!("Watch, then repeat. Top-left quits.");
 
     'running: loop {
         let t = clock.tick(&events, &mut queue);
@@ -77,7 +78,7 @@ fn main() -> Result<()> {
                     *at += 1;
                     if *at == sequence.len() {
                         sequence.push(rng.below(4) as usize);
-                        println!("round {}", sequence.len());
+                        tracing::info!("round {}", sequence.len());
                         phase = Phase::Show {
                             step: 0,
                             since: t + 0.35, // a beat before the next round starts
@@ -128,6 +129,6 @@ fn main() -> Result<()> {
         pad.set_all(grid.lights())?;
     }
 
-    println!("reached round {} ({:.1} fps)", sequence.len(), clock.fps());
+    tracing::info!("reached round {} ({:.1} fps)", sequence.len(), clock.fps());
     Ok(())
 }

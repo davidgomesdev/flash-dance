@@ -8,9 +8,10 @@ use flash_dance::{Event, Launchpad, Light, Pad, Result};
 const QUIT: Pad = Pad(98); // top row, rightmost
 
 fn main() -> Result<()> {
+    flash_dance::init_logging();
     let (mut pad, events) = Launchpad::connect()?;
     pad.set(QUIT, Light::Solid(5))?; // red: press to quit
-    println!("Tap the pads. Top-right button quits.");
+    tracing::info!("Tap the pads. Top-right button quits.");
 
     let mut lit = HashSet::new();
     for event in events {

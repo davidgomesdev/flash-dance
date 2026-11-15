@@ -587,7 +587,9 @@ checksum = "669a445ee724c5c69b1b06fe0b63e70a1c84bc9bb7d9696cd4f4e3ec45050408"
 name = "effects"
 version = "1.6.0"
 dependencies = [
+ "flash-dance",
  "flash-dance-effects",
+ "tracing",
 ]
 
 [[package]]
@@ -680,11 +682,17 @@ name = "flash-dance"
 version = "1.6.0"
 dependencies = [
  "midir",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "flash-dance-audio"
 version = "1.6.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "flash-dance-effects"
@@ -692,6 +700,7 @@ version = "1.6.0"
 dependencies = [
  "flash-dance",
  "flash-dance-audio",
+ "tracing",
 ]
 
 [[package]]
@@ -1612,6 +1621,7 @@ name = "life"
 version = "1.6.0"
 dependencies = [
  "flash-dance",
+ "tracing",
 ]
 
 [[package]]
@@ -1912,6 +1922,7 @@ name = "paint"
 version = "1.6.0"
 dependencies = [
  "flash-dance",
+ "tracing",
 ]
 
 [[package]]
@@ -1919,6 +1930,7 @@ name = "palette"
 version = "1.6.0"
 dependencies = [
  "flash-dance",
+ "tracing",
 ]
 
 [[package]]
@@ -2786,6 +2798,7 @@ name = "simon"
 version = "1.6.0"
 dependencies = [
  "flash-dance",
+ "tracing",
 ]
 
 [[package]]
@@ -2814,6 +2827,7 @@ name = "snake"
 version = "1.6.0"
 dependencies = [
  "flash-dance",
+ "tracing",
 ]
 
 [[package]]
@@ -3616,6 +3630,7 @@ name = "whack"
 version = "1.6.0"
 dependencies = [
  "flash-dance",
+ "tracing",
 ]
 
 [[package]]

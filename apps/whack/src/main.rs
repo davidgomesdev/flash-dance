@@ -57,12 +57,13 @@ impl Game {
 }
 
 fn main() -> Result<()> {
+    flash_dance::init_logging();
     let (mut pad, events) = Launchpad::connect()?;
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
     let mut grid = Grid::new();
     let mut game = Game::new(0.0);
-    println!("Whack the lit pad. Top-left quits.");
+    tracing::info!("Whack the lit pad. Top-left quits.");
 
     loop {
         let t = clock.tick(&events, &mut queue);
@@ -111,6 +112,6 @@ fn main() -> Result<()> {
         pad.set_all(grid.lights().chain(score_bar).chain(lives))?;
     }
 
-    println!("score {} ({:.1} fps)", game.score, clock.fps());
+    tracing::info!("score {} ({:.1} fps)", game.score, clock.fps());
     Ok(())
 }

@@ -284,17 +284,15 @@ impl App {
     }
 
     /// The last window of sound, silence if there is nothing to listen to. The
-    /// failure is worth a line on stderr and nothing more: the effect still runs,
+    /// failure is worth a warning and nothing more: the effect still runs,
     /// it just sits dark, which is what silence looks like anyway.
     fn sound(&mut self) -> Sound {
         if !self.listening {
             self.listening = true;
+            // The audio crate logs the source it opened.
             match Audio::open(self.source.as_deref()) {
-                Ok(audio) => {
-                    println!("listening to {}", audio.source());
-                    self.audio = Some(audio);
-                }
-                Err(e) => eprintln!("no sound: {e}"),
+                Ok(audio) => self.audio = Some(audio),
+                Err(e) => tracing::warn!("no sound: {e}"),
             }
         }
         self.audio.as_mut().map_or(Sound::default(), Audio::listen)
@@ -913,7 +911,7 @@ pub fn run(
     app.reset(&mut pad)?;
     pad.set_brightness(BRIGHTNESS[brightness])?;
     draw_speed(&mut pad, level)?;
-    println!("{}", start.name());
+    tracing::info!("showing {}", start.name());
     report(Report::Showing(start));
 
     'running: loop {
@@ -940,14 +938,14 @@ pub fn run(
             scrolling = Some((glyphs(&next.text), virtual_time));
             app.reset(&mut pad)?;
             draw_speed(&mut pad, level)?;
-            println!("marquee {:?}", next.text);
+            tracing::info!("marquee {:?}", next.text);
         }
         if let Some(name) = moods.remote(now) {
             current = None;
             picking = false;
             scrolling = None;
             draw_speed(&mut pad, level)?;
-            println!("mood {name}");
+            tracing::info!("mood {name} pressed");
             report(Report::Mood(name));
         }
         for event in &queue {
@@ -960,8 +958,9 @@ pub fn run(
                 }
                 _ => report(Report::Event(*event)),
             }
+            tracing::debug!(?event, "button");
             if quit.tapped(*event, now) {
-                println!("stop");
+                tracing::info!("stop tapped");
                 report(Report::Stop);
             }
             let Event::Press(button, _) = *event else {
@@ -975,14 +974,14 @@ pub fn run(
                     if let Some(moved) = step(brightness, by, BRIGHTNESS.len()) {
                         brightness = moved;
                         pad.set_brightness(BRIGHTNESS[brightness])?;
-                        println!("brightness {}", BRIGHTNESS[brightness]);
+                        tracing::info!("brightness {}", BRIGHTNESS[brightness]);
                     }
                     continue;
                 }
                 Some(Nudge::Speed(by)) => {
                     if let Some(moved) = step(level, by, SPEEDS.len()) {
                         level = moved;
-                        println!("speed {}x", SPEEDS[level]);
+                        tracing::info!("speed {}x", SPEEDS[level]);
                         if !picking {
                             draw_speed(&mut pad, level)?;
                         }
@@ -1026,7 +1025,7 @@ pub fn run(
                 && let Some(name) = moods.press(button, now)
             {
                 current = None;
-                println!("mood {name}");
+                tracing::info!("mood {name} pressed");
                 report(Report::Mood(name));
                 continue;
             }
@@ -1037,13 +1036,14 @@ pub fn run(
                     picking = false;
                     app.reset(&mut pad)?;
                     draw_speed(&mut pad, level)?;
-                    println!("{}", EFFECTS[i].name());
+                    tracing::info!("showing {}", EFFECTS[i].name());
                     report(Report::Showing(EFFECTS[i]));
                 }
             }
         }
 
         if quit.held(now) {
+            tracing::info!("stop held; quitting");
             break 'running;
         }
         if moods.on {
@@ -1057,7 +1057,7 @@ pub fn run(
                 draw_speed(&mut pad, level)?;
                 match current {
                     Some(i) => {
-                        println!("{}", EFFECTS[i].name());
+                        tracing::info!("showing {}", EFFECTS[i].name());
                         report(Report::Showing(EFFECTS[i]));
                     }
                     None => moods.show(),
@@ -1068,7 +1068,7 @@ pub fn run(
         }
     }
 
-    println!("{:.1} fps", clock.fps());
+    tracing::info!("session over at {:.1} fps", clock.fps());
     Ok(())
 }
 
@@ -1121,6 +1121,7 @@ pub fn panel(
         }
         if let Some(name) = moods.remote(now) {
             painting = false;
+            tracing::info!("mood {name} pressed");
             report(Report::Mood(name));
         }
         for event in &queue {
@@ -1133,8 +1134,9 @@ pub fn panel(
                 }
                 _ => report(Report::Event(*event)),
             }
+            tracing::debug!(?event, "button");
             if quit.tapped(*event, now) {
-                println!("stop");
+                tracing::info!("stop tapped");
                 report(Report::Stop);
             }
             let Event::Press(button, _) = *event else {
@@ -1155,10 +1157,12 @@ pub fn panel(
                 && let Some(name) = moods.press(button, now)
             {
                 painting = false;
+                tracing::info!("mood {name} pressed");
                 report(Report::Mood(name));
             }
         }
         if quit.held(now) {
+            tracing::info!("stop held; quitting");
             break 'running;
         }
         if moods.on {

@@ -31,6 +31,9 @@ static MARQUEE: Mutex<Option<Marquee>> = Mutex::new(None);
 /// Who hears the button events and mood presses of whatever session is running.
 static LISTENER: Mutex<Option<UnboundedSender<Report>>> = Mutex::new(None);
 
+/// The last error listing audio sources, so [`sources`] warns only when it changes.
+static SOURCES_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
 /// The one session. The Launchpad has a single MIDI port and a session holds it
 /// open, so exactly one effect can run at a time — starting one stops the last.
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
@@ -59,6 +62,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Sets pads of the panel's picture, `x` from the left and `y` from the top, under
 /// one lock so the panel never shows half of them. Off-grid pads are ignored.
 pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
+    tracing::debug!(pads = pads.len(), "painting the panel");
     let mut picture = lock(&PICTURE);
     for &(x, y, rgb) in pads {
         if let Some(pad) = picture.get_mut(y).and_then(|row| row.get_mut(x)) {
@@ -69,6 +73,8 @@ pub fn paint(pads: &[(usize, usize, [u8; 3])]) {
 
 /// Replaces the moods Session shows; a running session shows the new list at once.
 pub fn set_moods(moods: Vec<Mood>) {
+    let names: Vec<&str> = moods.iter().map(|mood| mood.name.as_str()).collect();
+    tracing::info!(?names, "moods set");
     lock(&MOODS).list = moods;
 }
 
@@ -111,7 +117,15 @@ pub fn effects() -> Vec<EffectInfo> {
 /// Capture sources, system sound first — that is what most people want to see the
 /// sound effects react to.
 pub fn sources() -> Vec<SourceInfo> {
-    let mut sources: Vec<SourceInfo> = flash_dance_audio::sources()
+    let listed = flash_dance_audio::sources().map_err(|error| error.to_string());
+    // Said once per change: the bridge rescans every 30 s, and a machine with no
+    // sound server would otherwise warn on every one.
+    match news(&mut lock(&SOURCES_ERROR), listed.as_ref().err()) {
+        Some(News::Failing(error)) => tracing::warn!("cannot list audio sources: {error}"),
+        Some(News::Recovered) => tracing::info!("audio sources can be listed again"),
+        None => {}
+    }
+    let mut sources: Vec<SourceInfo> = listed
         .unwrap_or_default()
         .into_iter()
         .map(|source| SourceInfo {
@@ -123,18 +137,39 @@ pub fn sources() -> Vec<SourceInfo> {
     sources
 }
 
+#[derive(Debug, PartialEq)]
+enum News {
+    Failing(String),
+    Recovered,
+}
+
+/// What is worth saying about this listing, given the error the last one had:
+/// a new or different error, or the first success after one. `last` becomes this
+/// listing's error.
+fn news(last: &mut Option<String>, error: Option<&String>) -> Option<News> {
+    let said = match (error, last.as_ref()) {
+        (Some(error), seen) if seen != Some(error) => Some(News::Failing(error.clone())),
+        (None, Some(_)) => Some(News::Recovered),
+        _ => None,
+    };
+    *last = error.cloned();
+    said
+}
+
 /// Starts an effect by its exact name, or the panel as [`PANEL`], stopping whatever
 /// was running first. `source` is the audio source for the sound effects; the
 /// others ignore it.
 pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
     let effect = EFFECTS.into_iter().find(|effect| effect.name() == name);
     if effect.is_none() && name != PANEL {
+        tracing::warn!("cannot start {name:?}: there is no such effect");
         return Err(format!("there is no effect called {name:?}"));
     }
     let source = source.filter(|s| !s.is_empty()).map(String::from);
 
     let mut running = running();
     halt(&mut running);
+    tracing::info!(source = source.as_deref(), "starting {name}");
     // A press or marquee meant for the session just stopped is not one for this.
     lock(&MOODS).pressed = None;
     *lock(&MARQUEE) = None;
@@ -144,6 +179,7 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         effect.map_or(PANEL, |e| e.name()).to_string(),
     )));
     let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
+    // The session logs each of these itself.
     let report = move |report| match report {
         Report::Showing(effect) => *lock(&shown) = Status::Running(effect.name().to_string()),
         heard => {
@@ -156,10 +192,11 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
             }
         }
     };
+    let session = name.to_string();
     let thread = std::thread::Builder::new()
         .name(format!("effect: {name}"))
         .spawn(move || {
-            match effect {
+            let ended = match effect {
                 Some(effect) => flash_dance_effects::run(
                     effect,
                     source.as_deref(),
@@ -170,9 +207,20 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
                 ),
                 None => flash_dance_effects::panel(&PICTURE, &MOODS, &MARQUEE, &flag, report),
             }
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+            // Logged here rather than when `state` collects it, so it is on time
+            // and once, whoever ends up asking.
+            match &ended {
+                Ok(()) if flag.load(Ordering::Relaxed) => tracing::info!("{session} stopped"),
+                Ok(()) => tracing::info!("{session} ended on the device"),
+                Err(error) => tracing::error!("{session} failed: {error}"),
+            }
+            ended
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            tracing::error!("cannot start a thread for {name}: {e}");
+            e.to_string()
+        })?;
     *running = Some(Running {
         showing,
         stop,
@@ -185,8 +233,10 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
 /// none is running: the session is what shows it, and what tells Home Assistant.
 pub fn press_mood(name: &str, source: Option<&str>) -> Result<Status, String> {
     if !lock(&MOODS).list.iter().any(|s| s.name == name) {
+        tracing::warn!("cannot press {name:?}: there is no such mood");
         return Err(format!("there is no mood called {name:?}"));
     }
+    tracing::info!("pressing mood {name}");
     if !matches!(status(), Status::Running(_) | Status::Mood(_)) {
         start(EFFECTS[0].name(), source)?;
     }
@@ -222,6 +272,7 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
             start(PANEL, source)?;
         }
     }
+    tracing::info!(then = then.map(|e| e.name()), "marquee {text:?}");
     *lock(&MARQUEE) = Some(Marquee {
         text: text.to_string(),
         then,
@@ -243,8 +294,19 @@ pub fn status() -> Status {
 /// clears the LEDs and hands the MIDI port back for the next effect to open.
 fn halt(running: &mut Option<Running>) {
     if let Some(current) = running.take() {
+        // One that already ended has said so itself.
+        if !current.thread.is_finished() {
+            match &*lock(&current.showing) {
+                Status::Mood(name) => tracing::info!("stopping mood {name}"),
+                Status::Running(name) => tracing::info!("stopping {name}"),
+                Status::Idle | Status::Failed { .. } => {}
+            }
+        }
         current.stop.store(true, Ordering::Relaxed);
-        let _ = current.thread.join();
+        // A panic has been printed by the panic hook; this says what it ended.
+        if current.thread.join().is_err() {
+            tracing::error!("the session crashed while stopping");
+        }
     }
 }
 
@@ -268,9 +330,35 @@ fn state(running: &mut Option<Running>) -> Status {
     match ended.thread.join() {
         Ok(Ok(())) => Status::Idle,
         Ok(Err(error)) => Status::Failed { effect, error },
-        Err(_) => Status::Failed {
-            effect,
-            error: "the effect crashed".to_string(),
-        },
+        Err(_) => {
+            tracing::error!("{effect} crashed");
+            Status::Failed {
+                effect,
+                error: "the effect crashed".to_string(),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failing_source_list_is_news_once_per_change() {
+        let (down, other) = ("no pactl".to_string(), "pactl failed".to_string());
+        let mut last = None;
+        assert_eq!(news(&mut last, None), None);
+        assert_eq!(
+            news(&mut last, Some(&down)),
+            Some(News::Failing(down.clone()))
+        );
+        assert_eq!(news(&mut last, Some(&down)), None, "the same error again");
+        assert_eq!(
+            news(&mut last, Some(&other)),
+            Some(News::Failing(other.clone()))
+        );
+        assert_eq!(news(&mut last, None), Some(News::Recovered));
+        assert_eq!(news(&mut last, None), None);
     }
 }
