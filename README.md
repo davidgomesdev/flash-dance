@@ -92,10 +92,12 @@ FLASH_DANCE_MQTT_PASSWORD=... cargo leptos serve
 `FLASH_DANCE_MQTT` is `host` or `host:port` (1883 by default); unset, the bridge is
 off. Home Assistant gets one device, **Launchpad**, with:
 
-- a **light**: on starts an effect from its effect list, off goes back to the
-  panel. The server always holds the Launchpad: whatever ends — off, Stop held on
-  the device, the device unplugged — it falls back to the panel, retrying every
-  second until a Launchpad answers, and the light only reads off while none does.
+- a **light**: on starts an effect from its effect list, off makes the grid
+  dark. The server always holds the Launchpad, so off releases nothing: presses,
+  moods and Stop still reach Home Assistant with every LED off. When an effect
+  ends on the device (Stop held) it falls back to the panel, and while no
+  Launchpad answers — unplugged, say — the light is *unavailable*, and the
+  server retries every second.
   One extra effect, `panel`, turns the grid into a panel Home Assistant paints;
 - **Audio source**, a select for what the sound effects listen to;
 - **Pad**, an event entity (`event.launchpad_pad`) firing `press` and `release`

@@ -54,6 +54,10 @@ pub struct MoodInfo {
 /// effect name collides with.
 pub const PANEL: &str = "panel";
 
+/// The session with every LED off: what Home Assistant's "off" shows, the device
+/// still held and its presses still reported. Started by name like [`PANEL`].
+pub const DARK: &str = "dark";
+
 /// What the server's effect session is doing.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Status {
@@ -482,12 +486,15 @@ fn StatusBar(
                     let status = status.get().unwrap_or_default();
                     // Stop goes back to the panel, so there is nothing to stop on it.
                     let running = matches!(
-                        &status, Status::Running(name) if name != PANEL
+                        &status, Status::Running(name) if name != PANEL && name != DARK
                     ) || matches!(status, Status::Mood(_));
                     let (class, text) = match &status {
                         Status::Idle => ("idle", "Nothing running.".to_string()),
                         Status::Running(name) if name == PANEL => {
                             ("live", "Showing the panel.".to_string())
+                        }
+                        Status::Running(name) if name == DARK => {
+                            ("idle", "Dark: the grid is off, the buttons still work.".to_string())
                         }
                         Status::Running(effect) => ("live", format!("Running {effect}.")),
                         Status::Mood(name) => ("live", format!("Mood {name}.")),

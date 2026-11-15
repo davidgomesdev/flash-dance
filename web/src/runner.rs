@@ -16,7 +16,7 @@ use crate::app::{EffectInfo, MoodInfo, SourceInfo, Status};
 
 /// The session that is not an effect, showing [`PICTURE`]; defined beside
 /// [`Status`] so the page can tell it apart too.
-pub use crate::app::PANEL;
+pub use crate::app::{DARK, PANEL};
 
 /// What the panel shows. Painted from outside (Home Assistant, over MQTT) whether
 /// or not the panel is running, so switching to it shows the latest picture at once.
@@ -62,6 +62,10 @@ struct Running {
     /// A session alive [`RETRY`] after this has connected: a missing Launchpad
     /// fails within milliseconds.
     started: Instant,
+    /// What was started, by name, and its audio source: what the supervisor tries
+    /// again when the session failed, so a Launchpad plugged back in comes back to
+    /// it — dark stays dark — rather than to the panel.
+    wanted: (String, Option<String>),
 }
 
 fn running() -> MutexGuard<'static, Option<Running>> {
@@ -172,7 +176,8 @@ fn news(last: &mut Option<String>, error: Option<&String>) -> Option<News> {
     said
 }
 
-/// Starts an effect by its exact name, or the panel as [`PANEL`], stopping whatever
+/// Starts an effect by its exact name, the panel as [`PANEL`] or the dark grid as
+/// [`DARK`], stopping whatever
 /// was running first. `source` is the audio source for the sound effects; the
 /// others ignore it.
 pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
@@ -190,7 +195,7 @@ fn start_on(
     retry: bool,
 ) -> Result<(), String> {
     let effect = EFFECTS.into_iter().find(|effect| effect.name() == name);
-    if effect.is_none() && name != PANEL {
+    if effect.is_none() && name != PANEL && name != DARK {
         tracing::warn!("cannot start {name:?}: there is no such effect");
         return Err(format!("there is no effect called {name:?}"));
     }
@@ -207,9 +212,12 @@ fn start_on(
     *lock(&MARQUEE) = None;
 
     let stop = Arc::new(AtomicBool::new(false));
-    let showing = Arc::new(Mutex::new(Status::Running(
-        effect.map_or(PANEL, |e| e.name()).to_string(),
-    )));
+    let dark = name == DARK;
+    let wanted = (name.to_string(), source.clone());
+    let showing = Arc::new(Mutex::new(Status::Running(match effect {
+        Some(effect) => effect.name().to_string(),
+        None => name.to_string(),
+    })));
     let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
     // The session logs each of these itself.
     let report = move |report| match report {
@@ -237,6 +245,7 @@ fn start_on(
                     &flag,
                     report,
                 ),
+                None if dark => flash_dance_effects::dark(&MOODS, &MARQUEE, &flag, report),
                 None => flash_dance_effects::panel(&PICTURE, &MOODS, &MARQUEE, &flag, report),
             }
             .map_err(|e| e.to_string());
@@ -268,6 +277,7 @@ fn start_on(
         stop,
         thread,
         started: Instant::now(),
+        wanted,
     });
     Ok(())
 }
@@ -306,7 +316,8 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
     };
     match then {
         // A mood is shown by an effect session too, but it may be the panel's.
-        Some(_) if matches!(status(), Status::Running(name) if name != PANEL) => {}
+        // Neither the panel nor the dark grid is an effect session to show it on.
+        Some(_) if matches!(status(), Status::Running(name) if name != PANEL && name != DARK) => {}
         Some(effect) => {
             start(effect.name(), source)?;
         }
@@ -321,6 +332,15 @@ pub fn marquee(text: &str, then: Option<&str>, source: Option<&str>) -> Result<S
         then,
     });
     Ok(status())
+}
+
+/// Every LED off, the device still held and its presses still reported: what
+/// "off" means when the server always holds the device.
+pub fn dark() -> Status {
+    let mut running = running();
+    // Like the panel, it cannot fail to be found, only to connect.
+    let _ = start_on(&mut running, DARK, None, false);
+    state(&running)
 }
 
 /// Back to the panel: what "stop" means when the server always holds the device.
@@ -372,21 +392,28 @@ fn look_after(running: &mut Option<Running>) {
         }
         return;
     }
-    // Ended: how is already logged by the session, except a crash.
-    let ended = running.take();
-    let something_ended = ended.is_some();
-    if let Some(ended) = ended
-        && ended.thread.join().is_err()
+    // Ended: how is already logged by the session, except a crash. A failure —
+    // no Launchpad, most often — tries the same again; one that ended on purpose
+    // or crashed goes to the panel, and so does boot, where nothing ended.
+    let (name, source) = match running
+        .take()
+        .map(|ended| (ended.wanted, ended.thread.join()))
     {
-        tracing::error!("the session crashed");
-        *lock(&FAILURE) = Some(("the session".to_string(), "it crashed".to_string()));
-    }
-    // Nothing ended at boot, and a retry says so at debug in `start_on`.
+        Some((wanted, Ok(Err(_)))) => wanted,
+        Some((_, Ok(Ok(())))) => {
+            tracing::info!("back to the panel");
+            (PANEL.to_string(), None)
+        }
+        Some((_, Err(_))) => {
+            tracing::error!("the session crashed; back to the panel");
+            *lock(&FAILURE) = Some(("the session".to_string(), "it crashed".to_string()));
+            (PANEL.to_string(), None)
+        }
+        None => (PANEL.to_string(), None),
+    };
+    // A retry says so at debug in `start_on`.
     let retry = lock(&FAILURE).is_some();
-    if something_ended && !retry {
-        tracing::info!("back to the panel");
-    }
-    let _ = start_on(running, PANEL, None, retry);
+    let _ = start_on(running, &name, source.as_deref(), retry);
 }
 
 /// Stops the supervisor, then the session, so its `Drop` releases the device and
