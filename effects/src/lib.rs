@@ -48,7 +48,7 @@ fn quit_button() -> Pad {
 
 /// Wall-clock seconds Stop/Solo/Mute must be held to quit. Anything shorter is a
 /// tap, which only reports [`Report::Stop`].
-pub const HOLD: f32 = 1.0;
+pub const HOLD: f32 = 5.0;
 
 /// Tells a tap of Stop/Solo/Mute from a hold. Times are wall-clock, not virtual:
 /// how long a finger stays down has nothing to do with the speed setting.
@@ -1205,8 +1205,8 @@ mod tests {
     fn a_tap_of_stop_reports_and_a_hold_quits() {
         let mut quit = QuitButton::default();
         assert!(!quit.tapped(Event::Press(quit_button(), 127), 10.0));
-        assert!(!quit.held(10.5));
-        assert!(quit.tapped(Event::Release(quit_button()), 10.5));
+        assert!(!quit.held(10.0 + HOLD - 0.5));
+        assert!(quit.tapped(Event::Release(quit_button()), 10.0 + HOLD - 0.5));
         assert!(!quit.held(20.0), "a released button is not held");
 
         assert!(!quit.tapped(Event::Press(quit_button(), 127), 30.0));
@@ -1214,7 +1214,7 @@ mod tests {
             quit.held(30.0 + HOLD),
             "quits without waiting for the release"
         );
-        assert!(!quit.tapped(Event::Release(quit_button()), 31.5));
+        assert!(!quit.tapped(Event::Release(quit_button()), 30.5 + HOLD));
 
         // Other buttons, and a release with no press before it, are not taps.
         assert!(!quit.tapped(Event::Press(MENU, 127), 40.0));
