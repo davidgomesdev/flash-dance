@@ -72,8 +72,8 @@ pub fn set_moods(moods: Vec<Mood>) {
     lock(&MOODS).list = moods;
 }
 
-/// Every button event and mood press from now on, from every session, as
-/// [`Report::Event`] and [`Report::Mood`]. There is one listener; a second call
+/// Every button event, mood press and tap of Stop from now on, from every session,
+/// as [`Report::Event`], [`Report::Mood`] and [`Report::Stop`]. There is one listener; a second call
 /// takes over from the first.
 pub fn listen() -> UnboundedReceiver<Report> {
     let (tx, rx) = unbounded_channel();

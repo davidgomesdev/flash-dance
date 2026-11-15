@@ -6,7 +6,9 @@
 //! - an **event** entity, `event.launchpad_pad`, firing on every grid press and
 //!   release with its `x`, `y` and velocity;
 //! - an **event** entity, `event.launchpad_mood`, firing with a mood's name as its
-//!   event type when Session's mood pad is pressed.
+//!   event type when Session's mood pad is pressed;
+//! - an **event** entity, `event.launchpad_stop`, firing `press` when Stop/Solo/Mute
+//!   is tapped. Holding it ends the session instead, which the light reports.
 //!
 //! HA lists the moods, retained, on [`MOODS_SET`]: `[{"pad": [x, y], "name": …,
 //! "rgb": [r, g, b]}]`. Their names are the mood entity's event types, so a new
@@ -46,6 +48,7 @@ const PAD: &str = "flash-dance/pad";
 const GRID: &str = "flash-dance/grid/set";
 const MOODS_SET: &str = "flash-dance/moods/set";
 const MOOD: &str = "flash-dance/mood";
+const STOP: &str = "flash-dance/stop";
 const MARQUEE_SET: &str = "flash-dance/marquee/set";
 const DISCOVERY: &str = "homeassistant/device/flash_dance/config";
 /// HA's birth message: `online` here means it has (re)started and wants discovery again.
@@ -193,6 +196,9 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 }
                 Report::Mood(name) => {
                     publish(&client, MOOD, false, json!({"event_type": name}).to_string());
+                }
+                Report::Stop => {
+                    publish(&client, STOP, false, json!({"event_type": "press"}).to_string());
                 }
                 Report::Showing(_) => {}
             },
@@ -423,6 +429,13 @@ fn discovery(effects: &[String], sources: &[String], moods: &[String]) -> Value 
             "state_topic": PAD,
             "event_types": ["press", "release"],
         },
+        "stop": {
+            "platform": "event",
+            "unique_id": "flash_dance_stop",
+            "name": "Stop",
+            "state_topic": STOP,
+            "event_types": ["press"],
+        },
     });
     if !sources.is_empty() {
         components["source"] = json!({
@@ -557,6 +570,7 @@ mod tests {
         assert!(effects.iter().all(|e| e != PANEL));
         assert!(config["components"].get("source").is_none());
         assert!(config["components"].get("mood").is_none());
+        assert_eq!(config["components"]["stop"]["state_topic"], STOP);
         assert_eq!(config["device"]["sw_version"], env!("CARGO_PKG_VERSION"));
         let full = discovery(&effects, &["mic".into()], &["Party".into()]);
         assert!(full["components"]["source"].is_object());

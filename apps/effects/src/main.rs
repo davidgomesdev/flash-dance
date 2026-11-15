@@ -32,8 +32,10 @@ fn starting_effect() -> Effect {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start = starting_effect();
     let source = std::env::var("FLASH_DANCE_SOURCE").ok();
-    println!("(User picks an effect, up/down brightness, left/right speed, Stop/Solo/Mute quits)");
-    // Nothing here ever sets it: from a terminal, the device's quit button ends it.
+    println!(
+        "(User picks an effect, up/down brightness, left/right speed, hold Stop/Solo/Mute to quit)"
+    );
+    // Nothing here ever sets it: from a terminal, holding the device's quit button ends it.
     run(
         start,
         source.as_deref(),
