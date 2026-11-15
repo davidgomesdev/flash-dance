@@ -196,7 +196,15 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                 Err(error) => {
                     // The next poll reconnects; wait so a dead broker is not hammered.
                     tracing::warn!("{error}; retrying in 5 s");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    // Still listening for the stop: shutdown should not sit out the
+                    // wait. There is no broker to say goodbye to, so just go.
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                        _ = &mut stop => {
+                            tracing::info!("stopped while the broker was unreachable");
+                            return;
+                        }
+                    }
                 }
             },
             Some(heard) = presses.recv() => match heard {

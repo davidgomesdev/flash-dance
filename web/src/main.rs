@@ -48,7 +48,14 @@ async fn main() {
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("shutting down");
+            tracing::info!("shutting down (Ctrl+C again to force it)");
+            // A way out if anything below ever hangs: a second Ctrl+C exits at once,
+            // at the price of whatever has not been cleaned up yet.
+            tokio::spawn(async {
+                let _ = tokio::signal::ctrl_c().await;
+                tracing::warn!("forced exit; the Launchpad may be left lit");
+                std::process::exit(130);
+            });
             // The bridge first, so no "on" from HA starts a session after the stop.
             if let Some((stop, bridge)) = bridge {
                 let _ = stop.send(());
@@ -77,13 +84,38 @@ struct Telemetry {
 
 #[cfg(feature = "ssr")]
 impl Telemetry {
+    /// Flushes both, giving each [`FLUSH`] at most: an unreachable collector must
+    /// not keep the process alive, and what it has not taken by then is lost.
     async fn shutdown(self) {
+        use std::time::Duration;
+        const FLUSH: Duration = Duration::from_secs(2);
+
         if let Some(otel) = self.otel {
-            let _ = otel.shutdown();
+            // `shutdown` blocks until the batch exporter has flushed, and with no
+            // collector listening it never does. A plain thread, not
+            // `spawn_blocking`: the runtime waits for its blocking tasks before the
+            // process can exit, so one stuck there would hang the exit instead.
+            let (done, flushed) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = done.send(otel.shutdown());
+            });
+            match tokio::time::timeout(FLUSH, flushed).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(error))) => tracing::warn!("OTLP did not flush: {error}"),
+                Ok(Err(_)) | Err(_) => {
+                    tracing::warn!("OTLP did not flush in {FLUSH:?}; leaving it")
+                }
+            }
         }
         if let Some((controller, task)) = self.loki {
-            controller.shutdown().await;
-            let _ = task.await;
+            // Logged before Loki stops, so this one still has a chance of arriving.
+            let flushed = tokio::time::timeout(FLUSH, async {
+                controller.shutdown().await;
+                let _ = task.await;
+            });
+            if flushed.await.is_err() {
+                tracing::warn!("Loki did not flush in {FLUSH:?}; leaving it");
+            }
         }
     }
 }
