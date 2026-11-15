@@ -5,4 +5,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
+flash-dance = { workspace = true, features = ["logging"] }
+tracing = { workspace = true }
 flash-dance-effects = { workspace = true }

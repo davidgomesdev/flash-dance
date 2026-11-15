@@ -7,7 +7,8 @@ this file covers the parts you cannot infer from the code.
 
 A cargo workspace around a Rust library that drives a **Novation Launchpad Mini
 MK3** over USB MIDI: set the LEDs under its 8x8 grid, top row and right column,
-and receive button presses. One external dependency, `midir`.
+and receive button presses. Two external dependencies: `midir`, and `tracing` for
+logs.
 
 ```
 api/           the `flash-dance` crate: the MIDI driver, plus the drawing
@@ -203,8 +204,8 @@ is a deliberate trade and worth understanding before replacing it: PulseAudio an
 PipeWire expose an output's `.monitor` as an ordinary source, so *system sound
 costs exactly as much code as a microphone* — one name in one argument. A portable
 capture crate (`cpal` and friends) gives you input devices and stops, and would
-have been the project's second dependency. `parec` makes it zero: `audio/` has no
-dependencies at all, FFT included.
+have been a dependency tree for one job. `parec` makes it none: `audio/` depends on
+nothing but `tracing`, FFT included.
 
 Four things in there were found the hard way:
 
@@ -348,7 +349,7 @@ and stayed at 0 after — including while a session started, failed and stopped
 underneath it. Count DOM teardowns rather than looking for the fallback text; most
 last under the 200 ms a sampler would take to see them.
 
-This is the one crate exempt from the "one dependency" rule below; a web framework
+This is the one crate exempt from the dependency rule below; a web framework
 was the ask. Nothing it pulls in may leak into `api/`, `audio/`, `effects/` or
 `apps/`.
 
@@ -416,5 +417,14 @@ Prefer it over Ctrl+C.
   kind** in commits, branches, PRs or issues.
 - `origin` is `davidgomesdev/flash-dance` (private). Push the branch and open a PR
   with `gh pr create`; leave the merge to a human.
-- Keep it small. `midir` is still the only external dependency, and the bar for a
-  second one is that the existing code genuinely cannot do the job.
+- Keep it small. `midir` and `tracing` are the only external dependencies, and the
+  bar for another is that the existing code genuinely cannot do the job.
+- **Log with `tracing`, never `println!`.** Info for what changes the device or a
+  session (an effect starting, a setting moving, a command from outside), debug for
+  anything that happens per press or per message, warn for a failure that is
+  carried on from, error for one that ends something. Libraries log through the
+  facade only; a subscriber belongs to a binary — the server's in `web/src/main.rs`,
+  the apps' as `flash_dance::init_logging()`, behind the `api` crate's `logging`
+  feature so the library does not carry one. `APP_LOG_LEVEL` sets the level,
+  debug by default. The server lets its own crates through at that level and
+  everything else at warn, so a new library crate needs adding to its filter.

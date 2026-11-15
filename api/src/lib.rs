@@ -9,6 +9,18 @@ use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// Logs to stdout for an app's `main`: `APP_LOG_LEVEL` (`error` to `trace`), debug
+/// when unset, like the web server. Behind the `logging` feature, so a crate that
+/// only uses the library does not get a subscriber with it.
+#[cfg(feature = "logging")]
+pub fn init_logging() {
+    let level = std::env::var("APP_LOG_LEVEL")
+        .ok()
+        .and_then(|level| level.parse().ok())
+        .unwrap_or(tracing::Level::DEBUG);
+    tracing_subscriber::fmt().with_max_level(level).init();
+}
+
 /// Novation SysEx header for the Launchpad Mini MK3.
 const HEADER: [u8; 6] = [0xF0, 0x00, 0x20, 0x29, 0x02, 0x0D];
 
@@ -125,6 +137,7 @@ impl Launchpad {
 
         let in_port = find_port(&input.ports(), |p| input.port_name(p).ok())?;
         let out_port = find_port(&output.ports(), |p| output.port_name(p).ok())?;
+        let port = input.port_name(&in_port).unwrap_or_default();
 
         let (tx, rx) = channel();
         let (brightness_tx, brightness_rx) = channel();
@@ -137,6 +150,10 @@ impl Launchpad {
                     let _ = brightness_tx.send(level);
                 } else if let Some(event) = Event::parse(msg) {
                     let _ = tx.send(event);
+                } else {
+                    // Mode-change confirmations, mostly: the device answers more
+                    // than the brightness readback.
+                    tracing::debug!("ignored MIDI message {msg:02X?}");
                 }
             },
             (),
@@ -155,9 +172,16 @@ impl Launchpad {
         pad.brightness_was = brightness_rx
             .recv_timeout(std::time::Duration::from_millis(250))
             .ok();
+        match pad.brightness_was {
+            Some(level) => tracing::debug!("brightness was {level}"),
+            None => tracing::warn!(
+                "the device did not report its brightness in 250 ms; it will be left at full on exit"
+            ),
+        }
 
         pad.set_brightness(127)?;
         pad.clear()?;
+        tracing::info!("connected to {port}, in programmer mode");
         Ok((pad, rx))
     }
 
@@ -213,11 +237,20 @@ impl Drop for Launchpad {
     fn drop(&mut self) {
         // Leave the device as we found it: dark, at the brightness it came with,
         // and back in its standalone mode.
-        let _ = self.clear();
-        if let Some(level) = self.brightness_was {
-            let _ = self.set_brightness(level);
+        // Warned, not returned: there is nowhere to return to from a drop, and the
+        // device may be left lit — the reset in AGENTS.md is the way out.
+        if let Err(error) = self.clear() {
+            tracing::warn!("could not clear the LEDs: {error}");
         }
-        let _ = self.set_programmer_mode(false);
+        if let Some(level) = self.brightness_was
+            && let Err(error) = self.set_brightness(level)
+        {
+            tracing::warn!("could not put the brightness back to {level}: {error}");
+        }
+        if let Err(error) = self.set_programmer_mode(false) {
+            tracing::warn!("could not leave programmer mode: {error}");
+        }
+        tracing::info!("released the Launchpad");
     }
 }
 

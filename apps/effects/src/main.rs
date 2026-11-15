@@ -20,9 +20,9 @@ fn starting_effect() -> Effect {
     match EFFECTS.into_iter().find(|e| e.name().contains(&query)) {
         Some(effect) => effect,
         None => {
-            eprintln!("no effect matches {query:?}. try one of:");
+            tracing::error!("no effect matches {query:?}. try one of:");
             for effect in EFFECTS {
-                eprintln!("  {}", effect.name());
+                tracing::info!("  {}", effect.name());
             }
             std::process::exit(2);
         }
@@ -30,9 +30,10 @@ fn starting_effect() -> Effect {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    flash_dance::init_logging();
     let start = starting_effect();
     let source = std::env::var("FLASH_DANCE_SOURCE").ok();
-    println!(
+    tracing::info!(
         "(User picks an effect, up/down brightness, left/right speed, hold Stop/Solo/Mute to quit)"
     );
     // Nothing here ever sets it: from a terminal, holding the device's quit button ends it.

@@ -12,7 +12,7 @@
 //! # fn main() -> flash_dance_audio::Result<()> {
 //! let mut audio = flash_dance_audio::Audio::open(None)?; // default: system sound
 //! let sound = audio.listen();
-//! println!("{:.2} {:?} {}", sound.pitch, sound.bands, sound.beat);
+//! tracing::info!("{:.2} {:?} {}", sound.pitch, sound.bands, sound.beat);
 //! # Ok(()) }
 //! ```
 
@@ -201,7 +201,9 @@ impl Audio {
                 .or_else(|| sources.first())
                 .ok_or("no audio sources found")?,
         };
-        Audio::record(&picked.name)
+        let audio = Audio::record(&picked.name)?;
+        tracing::info!("listening to {}", picked.name);
+        Ok(audio)
     }
 
     fn record(source: &str) -> Result<Audio> {
@@ -209,6 +211,7 @@ impl Audio {
         let mut out = child.stdout.take().ok_or("capture gave us no stdout")?;
         let window = Arc::new(Mutex::new(Ring::new()));
         let sink = Arc::clone(&window);
+        let name = source.to_string();
         std::thread::spawn(move || {
             // Whole samples only: a short read that split one in half would shift
             // every byte after it and turn the stream into noise.
@@ -219,6 +222,8 @@ impl Audio {
                     ring.push(i16::from_le_bytes(sample) as f32 / 32768.0);
                 }
             }
+            // Debug: dropping the `Audio` ends it like this too.
+            tracing::debug!("capture of {name} ended");
         });
 
         let now = Instant::now();

@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 flash-dance = { workspace = true }
 flash-dance-audio = { workspace = true }
+tracing = { workspace = true }

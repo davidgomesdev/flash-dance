@@ -54,6 +54,7 @@ fn seed(rng: &mut Rng) -> Board {
 }
 
 fn main() -> Result<()> {
+    flash_dance::init_logging();
     let (mut pad, events) = Launchpad::connect()?;
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
@@ -67,7 +68,7 @@ fn main() -> Result<()> {
     let mut stagnant = 0;
     let mut next_step = 0.0f32;
     let mut generation = 0u32;
-    println!("Tap to draw. Right column: run/pause, reseed, clear. Top-left quits.");
+    tracing::info!("Tap to draw. Right column: run/pause, reseed, clear. Top-left quits.");
 
     'running: loop {
         let t = clock.tick(&events, &mut queue);
@@ -121,7 +122,7 @@ fn main() -> Result<()> {
                 history.remove(0);
             }
             if stagnant >= STAGNANT_AFTER {
-                println!("stagnant after {generation} generations — reseeding");
+                tracing::info!("stagnant after {generation} generations — reseeding");
                 board = seed(&mut rng);
                 age = [0; 64];
                 history.clear();
@@ -154,6 +155,6 @@ fn main() -> Result<()> {
         )?;
     }
 
-    println!("{generation} generations ({:.1} fps)", clock.fps());
+    tracing::info!("{generation} generations ({:.1} fps)", clock.fps());
     Ok(())
 }

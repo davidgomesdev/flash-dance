@@ -27,12 +27,13 @@ fn draw(pad: &mut Launchpad, page: u8) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    flash_dance::init_logging();
     let (mut pad, events) = Launchpad::connect()?;
     let mut page = 0u8;
     let mut tapped: Vec<u8> = Vec::new();
     draw(&mut pad, page)?;
-    println!("Page {page}: indices {}-{}", page * 64, page * 64 + 63);
-    println!("(right column switches page, tap a pad for its index, top-left quits)");
+    tracing::info!("Page {page}: indices {}-{}", page * 64, page * 64 + 63);
+    tracing::info!("(right column switches page, tap a pad for its index, top-left quits)");
 
     for event in events {
         let Event::Press(button, _) = event else {
@@ -44,14 +45,14 @@ fn main() -> Result<()> {
         match button.to_xy() {
             Some((x, y)) => {
                 let index = page * 64 + y * 8 + x;
-                println!("  {index}");
+                tracing::info!("  {index}");
                 tapped.push(index);
             }
             None => {
                 if let Some(p) = (0..PAGES).find(|p| Pad::right(*p) == button) {
                     page = p;
                     draw(&mut pad, page)?;
-                    println!("Page {page}: indices {}-{}", page * 64, page * 64 + 63);
+                    tracing::info!("Page {page}: indices {}-{}", page * 64, page * 64 + 63);
                 }
             }
         }
@@ -59,7 +60,7 @@ fn main() -> Result<()> {
 
     if !tapped.is_empty() {
         let list: Vec<String> = tapped.iter().map(|i| i.to_string()).collect();
-        println!("tapped: {}", list.join(", "));
+        tracing::info!("tapped: {}", list.join(", "));
     }
     Ok(())
 }

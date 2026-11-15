@@ -5,3 +5,9 @@ edition = "2024"
 
 [dependencies]
 midir = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[features]
+# `init_logging`, for the apps: a subscriber the library itself never needs.
+logging = ["dep:tracing-subscriber"]

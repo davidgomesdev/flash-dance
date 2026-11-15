@@ -114,9 +114,8 @@ pub fn effects() -> Vec<EffectInfo> {
 /// Capture sources, system sound first — that is what most people want to see the
 /// sound effects react to.
 pub fn sources() -> Vec<SourceInfo> {
-    // Debug, not warn: with no sound server this fails on every rescan.
     let mut sources: Vec<SourceInfo> = flash_dance_audio::sources()
-        .inspect_err(|error| tracing::debug!("cannot list audio sources: {error}"))
+        .inspect_err(|error| tracing::warn!("cannot list audio sources: {error}"))
         .unwrap_or_default()
         .into_iter()
         .map(|source| SourceInfo {
@@ -151,20 +150,12 @@ pub fn start(name: &str, source: Option<&str>) -> Result<Status, String> {
         effect.map_or(PANEL, |e| e.name()).to_string(),
     )));
     let (flag, shown) = (Arc::clone(&stop), Arc::clone(&showing));
+    // The session logs each of these itself.
     let report = move |report| match report {
-        Report::Showing(effect) => {
-            tracing::info!("showing {}", effect.name());
-            *lock(&shown) = Status::Running(effect.name().to_string())
-        }
+        Report::Showing(effect) => *lock(&shown) = Status::Running(effect.name().to_string()),
         heard => {
-            match &heard {
-                Report::Mood(name) => {
-                    tracing::info!("mood {name} pressed");
-                    *lock(&shown) = Status::Mood(name.clone());
-                }
-                Report::Stop => tracing::info!("stop tapped"),
-                Report::Event(event) => tracing::debug!(?event, "button"),
-                Report::Showing(_) => {}
+            if let Report::Mood(name) = &heard {
+                *lock(&shown) = Status::Mood(name.clone());
             }
             // Nobody listening, or the listener gone, is not the session's problem.
             if let Some(listener) = lock(&LISTENER).as_ref() {
@@ -283,7 +274,10 @@ fn halt(running: &mut Option<Running>) {
             }
         }
         current.stop.store(true, Ordering::Relaxed);
-        let _ = current.thread.join();
+        // A panic has been printed by the panic hook; this says what it ended.
+        if current.thread.join().is_err() {
+            tracing::error!("the session crashed while stopping");
+        }
     }
 }
 
@@ -307,9 +301,12 @@ fn state(running: &mut Option<Running>) -> Status {
     match ended.thread.join() {
         Ok(Ok(())) => Status::Idle,
         Ok(Err(error)) => Status::Failed { effect, error },
-        Err(_) => Status::Failed {
-            effect,
-            error: "the effect crashed".to_string(),
-        },
+        Err(_) => {
+            tracing::error!("{effect} crashed");
+            Status::Failed {
+                effect,
+                error: "the effect crashed".to_string(),
+            }
+        }
     }
 }

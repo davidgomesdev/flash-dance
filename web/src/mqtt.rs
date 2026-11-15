@@ -122,7 +122,9 @@ pub async fn run(options: MqttOptions, mut stop: oneshot::Receiver<()>) {
                     // A fresh session every time, so subscriptions do not survive a
                     // reconnect and are made again here.
                     for topic in [LIGHT_SET, SOURCE_SET, GRID, MOODS_SET, MARQUEE_SET, HA_STATUS] {
-                        let _ = client.try_subscribe(topic, QoS::AtLeastOnce);
+                        if let Err(error) = client.try_subscribe(topic, QoS::AtLeastOnce) {
+                            tracing::warn!("could not subscribe to {topic}: {error}");
+                        }
                     }
                     announce(&client, &sources, &source, &moods);
                     published = None;

@@ -85,6 +85,7 @@ impl Snake {
 }
 
 fn main() -> Result<()> {
+    flash_dance::init_logging();
     let (mut pad, events) = Launchpad::connect()?;
     let mut clock = Clock::new(FPS);
     let mut queue = Vec::new();
@@ -94,7 +95,7 @@ fn main() -> Result<()> {
 
     let mut next_step = 0.0f32;
     let mut turn: Option<(i32, i32)> = None;
-    println!("Arrows steer, bottom scene button quits.");
+    tracing::info!("Arrows steer, bottom scene button quits.");
 
     let alive = 'running: loop {
         let t = clock.tick(&events, &mut queue);
@@ -147,6 +148,6 @@ fn main() -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(120));
         }
     }
-    println!("length {} ({:.1} fps)", snake.body.len(), clock.fps());
+    tracing::info!("length {} ({:.1} fps)", snake.body.len(), clock.fps());
     Ok(())
 }

@@ -6,7 +6,8 @@ async fn main() {
     use leptos::prelude::*;
     use leptos_axum::{LeptosRoutes, generate_route_list};
 
-    // APP_LOG_LEVEL (default debug) for this crate, warn for everything else.
+    // APP_LOG_LEVEL (default debug) for this crate and the project's libraries,
+    // warn for everything else.
     let level = std::env::var("APP_LOG_LEVEL")
         .ok()
         .and_then(|l| l.parse().ok())
@@ -101,6 +102,8 @@ fn telemetry(level: tracing::Level) -> Telemetry {
             .build_controller_url(url.parse().expect("invalid LOKI_URL"))
             .expect("cannot build the Loki layer")
     });
+    // Logged once the subscriber exists: before that, nothing would hear it.
+    let mut otel_failed = None;
     let otel = std::env::var("OTLP_ENDPOINT").ok().and_then(|endpoint| {
         opentelemetry_otlp::new_pipeline()
             .tracing()
@@ -116,7 +119,7 @@ fn telemetry(level: tracing::Level) -> Telemetry {
                 )]),
             ))
             .install_batch(opentelemetry_sdk::runtime::Tokio)
-            .inspect_err(|e| eprintln!("OTLP exporter failed: {e}; continuing without it"))
+            .inspect_err(|e| otel_failed = Some(e.to_string()))
             .ok()
     });
     let otel_layer = otel
@@ -133,11 +136,17 @@ fn telemetry(level: tracing::Level) -> Telemetry {
         .with(
             tracing_subscriber::filter::Targets::new()
                 .with_target("flash_dance_web", level)
+                .with_target("flash_dance_effects", level)
+                .with_target("flash_dance_audio", level)
+                .with_target("flash_dance", level)
                 .with_default(tracing::Level::WARN),
         )
         .with(tracing_subscriber::fmt::layer())
         .with(loki_layer)
         .init();
+    if let Some(error) = otel_failed {
+        tracing::warn!("OTLP exporter failed: {error}; continuing without it");
+    }
     Telemetry { loki, otel }
 }
 
